@@ -28,9 +28,14 @@
 //   2 — file write error
 
 import { writeFileSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { getEffectiveOllamaSettings } from './lib/effective-ollama.mjs';
 
-const BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
+const PROJECT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const effective = getEffectiveOllamaSettings(PROJECT_DIR);
+// Explicit shell env wins for one-shot overrides (OLLAMA_BASE_URL=… node …).
+const BASE_URL = process.env.OLLAMA_BASE_URL || effective.baseUrl;
 const outPath = process.argv[2]
   ? resolve(process.argv[2])
   : resolve(`ollama-backup-${new Date().toISOString().slice(0, 10)}.json`);

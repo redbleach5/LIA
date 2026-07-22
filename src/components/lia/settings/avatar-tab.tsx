@@ -2,8 +2,8 @@
 
 // ============================================================================
 // AvatarTab — тема, VRM-модель, простой кадр и фон.
-// Тонкая настройка (свет, поза, 10 анимаций) убрана: в рантайме
-// остаются DEFAULT_AVATAR_CONFIG + выбранные камера/фон.
+// Тонкая настройка (свет, поза, анимации) в UI скрыта, но при сохранении
+// lighting/body/animation из текущего config сохраняются (не затираются).
 // ============================================================================
 
 import { useRef, useState } from 'react';
@@ -61,9 +61,12 @@ export function AvatarTab({
   const saveAvatar = async () => {
     setSaving(true);
     try {
-      // Keep lighting / body / animation at defaults — UI no longer edits them.
+      // Preserve lighting / body / animation (layout may write body; don't wipe).
       const config: AvatarConfig = {
-        ...DEFAULT_AVATAR_CONFIG,
+        ...avatarConfig,
+        lighting: avatarConfig.lighting ?? DEFAULT_AVATAR_CONFIG.lighting,
+        body: avatarConfig.body ?? DEFAULT_AVATAR_CONFIG.body,
+        animation: avatarConfig.animation ?? DEFAULT_AVATAR_CONFIG.animation,
         camera: avatarConfig.camera,
         background: avatarConfig.background,
       };

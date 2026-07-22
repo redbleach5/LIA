@@ -18,6 +18,8 @@ import type {
 import { previewUrlForDesign } from './project-manifest';
 import { parseRuntimeScript } from './script-parse';
 import type { ParsedScript } from './script-parse';
+import { normalizeRuntimeScript } from './script-normalize';
+import { probeHttpUrl } from './health';
 
 export type { ParsedScript };
 export { parseRuntimeScript };
@@ -145,15 +147,31 @@ async function waitHealthy(session: Session): Promise<boolean> {
     }
     return false;
   }
-  const healthy = await probePort(session.port, HEALTH_TIMEOUT_MS);
-  if (healthy) {
-    setStatus(session, 'healthy');
-    pushLog(session, 'system', `Health OK — порт ${session.port} слушает`);
-    return true;
+
+  // 1) Port must accept TCP
+  const portUp = await probePort(session.port, HEALTH_TIMEOUT_MS);
+  if (!portUp) {
+    setStatus(session, 'unhealthy', `Порт ${session.port} не отвечает за ${HEALTH_TIMEOUT_MS}ms`);
+    pushLog(session, 'system', session.lastError ?? 'unhealthy');
+    return false;
   }
-  setStatus(session, 'unhealthy', `Порт ${session.port} не отвечает за ${HEALTH_TIMEOUT_MS}ms`);
-  pushLog(session, 'system', session.lastError ?? 'unhealthy');
-  return false;
+
+  // 2) For iframe preview — GET / must return 2xx/3xx (not just open port)
+  const url = session.previewUrl || `http://127.0.0.1:${session.port}/`;
+  const http = await probeHttpUrl(url, {
+    timeoutMs: Math.min(12_000, HEALTH_TIMEOUT_MS),
+    pollMs: HEALTH_POLL_MS,
+  });
+  if (!http.ok) {
+    const err = `Preview ${url} не готов: ${http.error ?? 'no response'}`;
+    setStatus(session, 'unhealthy', err);
+    pushLog(session, 'system', err);
+    return false;
+  }
+
+  setStatus(session, 'healthy');
+  pushLog(session, 'system', `Health OK — ${url} → HTTP ${http.status ?? 200}`);
+  return true;
 }
 
 function attachChild(session: Session, child: ChildProcess) {
@@ -209,14 +227,32 @@ export type StartRuntimeResult = {
 };
 
 export async function startRuntime(input: StartRuntimeInput): Promise<StartRuntimeResult> {
-  const parsed = parseRuntimeScript(input.script);
+  const script = normalizeRuntimeScript(input.script, input.port ?? undefined);
+  const parsed = parseRuntimeScript(script);
   if (!parsed.ok) {
-    return { success: false, status: 'error', error: parsed.error, restartCount: 0 };
+    return {
+      success: false,
+      status: 'error',
+      error:
+        parsed.error
+        + ' — для статики используй: npx --yes serve -l 5173 (или src). Не передавай голый "vite".',
+      restartCount: 0,
+    };
   }
 
   const session = ensureSession(input.taskId);
+  const prevCmd = `${session.command ?? ''} ${session.args.join(' ')}`.trim();
+  const nextCmd = `${parsed.command} ${parsed.args.join(' ')}`.trim();
+  const scriptChanged = Boolean(prevCmd && prevCmd !== nextCmd);
+
   if (session.child && !session.child.killed) {
     await stopRuntime(input.taskId);
+  }
+
+  // Heal with a different script gets a fresh restart budget.
+  if (scriptChanged) {
+    session.restartCount = 0;
+    session.startedAt = null;
   }
 
   session.cwd = input.cwd;

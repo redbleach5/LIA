@@ -35,7 +35,9 @@
 
 import { execSync, spawnSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { getEffectiveOllamaSettings } from './lib/effective-ollama.mjs';
 
 // ── Args ──
 const args = process.argv.slice(2);
@@ -49,8 +51,11 @@ if (doCommit && doAmend) {
   process.exit(3);
 }
 
-const BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
-const MODEL = process.env.OLLAMA_MODEL || process.env.OLLAMA_COMMIT_MODEL || 'qwen2.5:7b';
+const PROJECT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const effective = getEffectiveOllamaSettings(PROJECT_DIR);
+// Explicit shell env wins for one-shot overrides (OLLAMA_BASE_URL=… node …).
+const BASE_URL = process.env.OLLAMA_BASE_URL || effective.baseUrl;
+const MODEL = process.env.OLLAMA_COMMIT_MODEL || process.env.OLLAMA_MODEL || effective.model;
 
 // ── Git helpers ──
 function git(args) {

@@ -22,11 +22,10 @@ export const EMOTION_COLORS: Record<EmotionAxis, { base: string; glow: string }>
 // Arm pose presets → Euler XYZ для normalized bones (three-vrm).
 //
 // В normalized T-pose identity = руки горизонтально.
-// Чтобы опустить руки вдоль тела: leftUpperArm.z > 0, rightUpperArm.z < 0
-// (проверено на lia_v2.vrm / VRoid Garden, VRM 0.x).
+// Базовые знаки ниже — VRM 0.x (leftUpperArm.z > 0 опускает руку).
+// Для VRM 1.0 applyArmPose() автоматически инвертирует Z при необходимости.
 //
-// Имя ARM_POSE_QUATERNIONS историческое — храним Euler-тройки, применяем
-// через bone.rotation.set() в vrm-avatar.tsx.
+// Имя ARM_POSE_QUATERNIONS историческое — храним Euler-тройки.
 // ============================================================================
 export const ARM_POSE_QUATERNIONS: Record<ArmPose, {
   leftUpperArm: [number, number, number];   // Euler XYZ в радианах

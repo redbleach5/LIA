@@ -1,11 +1,11 @@
 import 'server-only';
 
-import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+// Ollama preferences: SQLite (UI) is the source of truth.
+// .env OLLAMA_* values are bootstrap seed only (first launch when DB is empty).
+// We never write OLLAMA_* back into the .env file.
+
 import { db } from '../db';
-import { PROJECT_ROOT } from '../paths';
 import { logger } from '../logger';
-import { removeEnvVar, upsertEnvVar } from './env-file-upsert';
 
 const DB_KEYS = {
   baseUrl: 'ollama_base_url',
@@ -21,11 +21,7 @@ export type OllamaEnvSnapshot = {
   embedModel: string;
 };
 
-function envPath(): string {
-  return join(PROJECT_ROOT, '.env');
-}
-
-/** Mirror effective Ollama settings into process.env (CLI scripts in same process). */
+/** Mirror effective Ollama settings into process.env (same-process CLI / helpers). */
 export function applyOllamaToProcessEnv(snapshot: OllamaEnvSnapshot): void {
   process.env.OLLAMA_BASE_URL = snapshot.baseUrl;
   process.env.OLLAMA_MODEL = snapshot.model;
@@ -41,33 +37,9 @@ export function applyOllamaToProcessEnv(snapshot: OllamaEnvSnapshot): void {
   }
 }
 
-/**
- * Write OLLAMA_* keys in .env to match runtime settings (DB/UI).
- * Returns false if .env is missing.
- */
-export function writeOllamaEnvFile(snapshot: OllamaEnvSnapshot): boolean {
-  const path = envPath();
-  if (!existsSync(path)) return false;
-
-  let content = readFileSync(path, 'utf-8');
-  content = upsertEnvVar(content, 'OLLAMA_BASE_URL', snapshot.baseUrl);
-  content = upsertEnvVar(content, 'OLLAMA_MODEL', snapshot.model);
-
-  if (snapshot.agentModel.trim()) {
-    content = upsertEnvVar(content, 'OLLAMA_AGENT_MODEL', snapshot.agentModel.trim());
-  } else {
-    content = removeEnvVar(content, 'OLLAMA_AGENT_MODEL');
-  }
-
-  if (snapshot.embedModel.trim()) {
-    content = upsertEnvVar(content, 'OLLAMA_EMBED_MODEL', snapshot.embedModel.trim());
-  } else {
-    content = removeEnvVar(content, 'OLLAMA_EMBED_MODEL');
-  }
-
-  writeFileSync(path, content, 'utf-8');
+/** After UI save — keep in-memory process.env in sync (no .env file write). */
+export function mirrorOllamaToProcessEnv(snapshot: OllamaEnvSnapshot): void {
   applyOllamaToProcessEnv(snapshot);
-  return true;
 }
 
 async function seedDbFromSnapshot(snapshot: OllamaEnvSnapshot): Promise<void> {
@@ -107,8 +79,14 @@ async function seedDbFromSnapshot(snapshot: OllamaEnvSnapshot): Promise<void> {
 
 let reconcileDone = false;
 
+/** Test-only: allow re-running reconcile in unit tests. */
+export function resetOllamaEnvReconcileForTests(): void {
+  reconcileDone = false;
+}
+
 /**
- * On first server boot: seed DB from .env if empty; else push DB values into .env.
+ * On first server boot: seed DB from .env/bootstrap snapshot if empty.
+ * When DB already has a model — only mirror into process.env (never rewrite .env).
  */
 export async function reconcileOllamaEnvAndDb(snapshot: OllamaEnvSnapshot): Promise<void> {
   if (reconcileDone) return;
@@ -120,35 +98,21 @@ export async function reconcileOllamaEnvAndDb(snapshot: OllamaEnvSnapshot): Prom
 
     if (!hasDbModel) {
       await seedDbFromSnapshot(snapshot);
-      const wrote = writeOllamaEnvFile(snapshot);
-      logger.info('llm', 'Ollama settings seeded from .env into DB', {
+      applyOllamaToProcessEnv(snapshot);
+      logger.info('llm', 'Ollama settings seeded from bootstrap (.env) into DB', {
         model: snapshot.model,
-        envFileUpdated: wrote,
       });
       return;
     }
 
-    const wrote = writeOllamaEnvFile(snapshot);
-    if (wrote) {
-      logger.info('llm', 'Synced Ollama settings from DB to .env', {
-        model: snapshot.model,
-        agentModel: snapshot.agentModel || '(same as chat)',
-        embedModel: snapshot.embedModel || 'auto',
-      });
-    }
+    applyOllamaToProcessEnv(snapshot);
+    logger.debug('llm', 'Ollama settings loaded from DB (process.env mirrored)', {
+      model: snapshot.model,
+      agentModel: snapshot.agentModel || '(same as chat)',
+      embedModel: snapshot.embedModel || 'auto',
+    });
   } catch (e) {
     reconcileDone = false;
     logger.warn('llm', 'Ollama .env/DB reconcile failed (non-fatal)', {}, e);
-  }
-}
-
-/** After UI save — keep .env in sync without re-running full reconcile. */
-export function syncOllamaEnvFileAfterSave(snapshot: OllamaEnvSnapshot): void {
-  try {
-    if (writeOllamaEnvFile(snapshot)) {
-      logger.debug('llm', 'Updated .env OLLAMA_* after settings save', { model: snapshot.model });
-    }
-  } catch (e) {
-    logger.warn('llm', 'Failed to update .env after settings save (non-fatal)', {}, e);
   }
 }

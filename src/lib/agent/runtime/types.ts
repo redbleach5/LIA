@@ -31,6 +31,8 @@ export type ProjectTreeEntry = {
 export type ProjectDesign = {
   name: string;
   kind: ProjectKind;
+  /** Canonical scaffold id — locked presets ignore free-form stacks. */
+  preset?: string;
   stack: string[];
   tree: ProjectTreeEntry[];
   scripts: ProjectScripts;

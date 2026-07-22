@@ -18,6 +18,7 @@ import { isOpenOrShowArtifactGoal, isFixOrDebugArtifactGoal } from '@/lib/agent/
 import { beginChatStream, endChatStream } from '@/lib/chat/client-stream-control';
 import { parseStreamErrorPayload } from '@/lib/chat/stream-error';
 import { isAgentBusyStatus } from '@/lib/agent/task-status-ui';
+import { cueAvatarGesture, cueAvatarLook } from '@/lib/avatar-cues';
 import { toast } from 'sonner';
 
 export function useChat() {
@@ -250,6 +251,8 @@ export function useChat() {
     useChatStore.getState().addMessage(userMsg);
     useChatStore.getState().addMessage(liaMsg);
     useChatStore.getState().setStreaming(true);
+    cueAvatarLook('chat', 4);
+    cueAvatarGesture('acknowledge');
 
     const ac = new AbortController();
     abortRef.current = ac;
@@ -435,6 +438,7 @@ export function useChat() {
       if (abortRef.current === ac) abortRef.current = null;
       streamEpisodeIdRef.current = null;
       useChatStore.getState().setStreaming(false);
+      cueAvatarLook('user', 1.5);
     }
   }, [pendingAttachments, stillOnStreamEpisode]);
 

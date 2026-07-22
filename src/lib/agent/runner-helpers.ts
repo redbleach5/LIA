@@ -60,6 +60,15 @@ import { formatAgentStepHistory } from './step-history-compact';
 import { GROUNDING } from '@/lib/prompts/grounding';
 import { stepsHaveRuntimeVerify } from './runtime/verify';
 import { designNeedsRuntimeVerify, inferProjectDesign } from './runtime/infer-design';
+import {
+  annotateCreateRunCommandObservation,
+  isIncompleteCreatePlan,
+  looksLikeServerStartCommand,
+} from './create-progress';
+import {
+  describePresetForPrompt,
+  resolveCreatePresetId,
+} from './runtime/presets';
 
 /** Create / fix living artifacts that need Process Supervisor before ГОТОВО. */
 export function goalRequiresRuntimeVerify(goal: string): boolean {
@@ -464,11 +473,12 @@ export function describeFsScopeForPrompt(
   }
   if (isSandboxFsScope(fsScope)) {
     if (goal && isCodeCreationGoal(goal)) {
+      const presetId = resolveCreatePresetId(goal);
       return [
-        `Рабочая директория — пустой write-sandbox: ${fsScope}.`,
-        'Сначала propose_design (стек + структура), затем write_file (пути относительно sandbox).',
-        'Пустой list_tree в начале — нормально. После записи — runtime_start для verify.',
-        'НЕ пиши ГОТОВО без успешного write_file и runtime_start.',
+        `Рабочая директория — write-sandbox: ${fsScope}.`,
+        describePresetForPrompt(presetId),
+        'lia.project.json уже мог создать Design Gate — не переизобретай стек.',
+        'НЕ пиши ГОТОВО без успешного write_file и runtime_start (HTTP 200 на preview).',
       ].join(' ');
     }
     if (goal && (isFixOrDebugArtifactGoal(goal) || isReferentialWorkspaceGoal(goal))) {
@@ -591,10 +601,9 @@ const FALLBACK_PLANS: Record<
   },
   code_create: {
     steps: [
-      'propose_design — стек, дерево файлов, scripts и preview (lia.project.json)',
-      'write_file — основной файл(ы) с полным рабочим кодом (не заглушки)',
-      'runtime_start — поднять preview/процесс и дождаться health',
-      'При ошибке: runtime_logs → edit_file → runtime_start (heal); затем ГОТОВО с путями',
+      'write_file index.html + style.css + script.js (preset static, корень sandbox)',
+      'runtime_start — preview на 5173 (npx serve), дождаться HTTP 200',
+      'При ошибке: runtime_logs → edit_file → runtime_start; затем ГОТОВО',
     ],
     needsTools: true,
     complexity: 'medium',
@@ -727,12 +736,13 @@ export async function generatePlan(
     ? `- Это lookup в базе знаний: планируй только KB-инструменты (list_sources, search_sources, get_source, read_folder_file).`
     : '';
   const createHint = isCodeCreationGoal(task.goal) && !sandboxReuse
-    ? `- Это СОЗДАНИЕ артефакта (Create Runtime):
-  1) propose_design (или уже есть lia.project.json) — стек + структура + scripts/preview
-  2) write_file с полным рабочим кодом
-  3) runtime_start — обязательно проверить запуск; при ошибке runtime_logs → edit_file → runtime_start
-  4) ГОТОВО только после успешного runtime
-- steps — короткие СТРОКИ. НЕ вставляй JSON tool-call с args и НЕ вставляй тело файла в план.`
+    ? `- Это СОЗДАНИЕ артефакта. ${describePresetForPrompt(resolveCreatePresetId(task.goal))}
+  План ОБЯЗАН содержать:
+  1) write_file по дереву манифеста (для игр: index.html, style.css, script.js)
+  2) runtime_start — verify preview (HTTP 200)
+  3) при ошибке: runtime_logs → edit_file → runtime_start; затем ГОТОВО
+- Запрещён одношаговый план и свободный выбор vite/express для простых игр.
+- steps — короткие СТРОКИ.`
     : '';
   const fixHint = sandboxReuse && (isFixOrDebugArtifactGoal(task.goal) || isReferentialWorkspaceGoal(task.goal))
     ? `- Follow-up по артефакту: сначала list_tree/read_file в текущем sandbox, потом правка, затем runtime_start. Запрещено начинать с list_sources или ask_user.`
@@ -853,6 +863,19 @@ ${fsHint}
       }
     }
 
+    // Create Runtime: reject 1-step propose_design / plans without write+runtime.
+    if (
+      isCodeCreationGoal(task.goal)
+      && !shouldReuseRecentEpisodeSandbox(task.goal)
+      && isIncompleteCreatePlan(meaningful)
+    ) {
+      logger.warn('agent', 'Plan: incomplete create pipeline, using fallback', {
+        goal: task.goal.slice(0, 80),
+        sample: meaningful.slice(0, 4),
+      });
+      return fallbackPlan(task);
+    }
+
     // ── Sanity check: cap steps to maxSteps (on cleaned list, not raw placeholders) ──
     if (meaningful.length > task.maxSteps) {
       validated.data.steps = meaningful.slice(0, task.maxSteps);
@@ -943,10 +966,11 @@ ${isExploration
     : `- Анализ проекта/кода: list_sources → search_codebase (исходники) и/или search_sources + read_folder_file (документы). Folder KB ≠ .ts исходники.
 - Пустой list_tree / ошибка пути / пустой sandbox — это НЕ конец задачи: смени стратегию (search_codebase / list_sources), не пиши ГОТОВО`
   : isCreation
-    ? `- СОЗДАНИЕ (Create Runtime): propose_design → write_file (полный код на диск) → runtime_start.
-- Много файлов — несколько write_file. После записи — runtime_start (не только list_tree).
-- При ошибке запуска: runtime_logs → edit_file → runtime_start (heal, до 2–3 циклов).
-- ГОТОВО только после успешного write_file и runtime_start (status healthy/running).`
+    ? `- СОЗДАНИЕ: ${describePresetForPrompt(resolveCreatePresetId(task.goal))}
+- lia.project.json уже есть (Design Gate) — write_file строго по его tree.
+- После записи сразу runtime_start (без script:"vite"). Verify = HTTP 200 на preview.
+- При ошибке: runtime_logs → edit_file → runtime_start.
+- ГОТОВО только после успешного runtime_start (status healthy).`
     : '- Если нужен код — полный рабочий код; многофайловый проект — отдельные save_artifact; проверка — run_command или code_run'}
 - "ГОТОВО: <резюме>" или "DONE: <summary>" — только отдельной строкой и только если цель реально закрыта
 - ask_user — только при настоящей неоднозначности цели; не спрашивай из‑за пустого sandbox
@@ -1022,8 +1046,19 @@ export function formatToolObservation(output: unknown, cap = OBSERVATION_CAP): s
   return json;
 }
 
-function observationForToolCall(name: string, output: unknown): string {
-  if (name === 'run_command') return formatRunCommandObservation(output);
+function observationForToolCall(
+  name: string,
+  output: unknown,
+  input?: unknown,
+  opts?: { createRuntime?: boolean },
+): string {
+  if (name === 'run_command') {
+    let obs = formatRunCommandObservation(output);
+    if (opts?.createRuntime && looksLikeServerStartCommand(input)) {
+      obs = annotateCreateRunCommandObservation(obs);
+    }
+    return obs;
+  }
   const cap = isKbAgentAction(name) ? OBSERVATION_CAP_KB : OBSERVATION_CAP;
   return formatToolObservation(output, cap);
 }
@@ -1200,13 +1235,15 @@ export async function executeStep(
   let action = 'reason';
   let input: unknown = {};
   let observation = '';
+  const createRuntime = isCodeCreationGoal(task.goal) || goalRequiresRuntimeVerify(task.goal);
+  const obsOpts = { createRuntime };
 
   if (toolCalls.length > 0) {
     if (toolCalls.length === 1) {
       const last = toolCalls[0];
       action = last.name;
       input = last.input;
-      observation = observationForToolCall(last.name, last.output);
+      observation = observationForToolCall(last.name, last.output, last.input, obsOpts);
     } else {
       action = toolCalls.map(t => t.name).join(' + ');
       input = toolCalls.map(t => ({ tool: t.name, input: t.input }));
@@ -1214,7 +1251,7 @@ export async function executeStep(
       const anyKb = toolCalls.some(t => isKbAgentAction(t.name));
       const cap = anyCmd ? OBSERVATION_CAP_CMD : anyKb ? OBSERVATION_CAP_KB : OBSERVATION_CAP;
       observation = toolCalls
-        .map(t => `[${t.name}]\n${observationForToolCall(t.name, t.output)}`)
+        .map(t => `[${t.name}]\n${observationForToolCall(t.name, t.output, t.input, obsOpts)}`)
         .join('\n\n')
         .slice(0, cap);
     }

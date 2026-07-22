@@ -1,4 +1,4 @@
-// Effective Ollama settings: DB (UI) overrides .env — mirrors src/lib/ollama.ts load order.
+// Effective Ollama settings: DB (UI) is source of truth; .env is bootstrap seed only.
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';

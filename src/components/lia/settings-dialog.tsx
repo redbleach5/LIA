@@ -43,6 +43,7 @@ import { AvatarTab } from './settings/avatar-tab';
 import { KbTab } from './settings/kb-tab';
 import { AboutTab } from './settings/about-tab';
 import type { Settings } from './settings/types';
+import { cueAvatarLook } from '@/lib/avatar-cues';
 
 export function SettingsDialog({ initialOpen = false }: { initialOpen?: boolean }) {
   const [open, setOpen] = useState(initialOpen);
@@ -89,13 +90,23 @@ export function SettingsDialog({ initialOpen = false }: { initialOpen?: boolean 
   // Banner / gear can reopen settings after first mount.
   // Lazy wrapper only mounts us once; without this, lia-open-settings is a no-op.
   useEffect(() => {
-    const openSettings = () => setOpen(true);
+    const openSettings = () => {
+      cueAvatarLook('settings', 3);
+      setOpen(true);
+    };
     window.addEventListener('lia-open-settings', openSettings);
     return () => window.removeEventListener('lia-open-settings', openSettings);
   }, []);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) cueAvatarLook('settings', 3);
+        else cueAvatarLook('user', 1.2);
+      }}
+    >
       <DialogTrigger asChild>
         <button
           type="button"

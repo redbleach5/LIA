@@ -32,6 +32,7 @@ import { shouldFinalizeKbLookupAfterSteps } from './kb-step-utils';
 import { isCodeCreationGoal, stepsHaveCreationArtifacts } from './kb-step-utils';
 import { shouldReuseRecentEpisodeSandbox } from './artifact-followup-client';
 import { stepsHaveRuntimeVerify } from './runtime/verify';
+import { createRuntimeCoachObservation } from './create-progress';
 import {
   emitAgentEvent,
   clearBuffer,
@@ -491,6 +492,8 @@ export async function runAgentTask(taskId: string): Promise<void> {
     let strategyHintGiven = false;
     /** Extra nudge when the model spins on reason-only without tools. */
     let toolForceHintCount = 0;
+    /** Create Runtime coach (inspect stall / missing runtime_start). */
+    let createCoachHintCount = 0;
 
     for (let i = startStep; i < task.maxSteps; i++) {
       // Cancellation check — between steps
@@ -517,6 +520,33 @@ export async function runAgentTask(taskId: string): Promise<void> {
           startTime = newStartTime;
         }
         if (isCancelled(taskId)) continue;
+      }
+
+      // Create Runtime coach — before loop detector so we steer early.
+      if (steps.length >= 1 && goalRequiresRuntimeVerify(task.goal)) {
+        const coachObs = createRuntimeCoachObservation({
+          goal: task.goal,
+          steps,
+          maxSteps: task.maxSteps,
+          nextStepIndex: i,
+          requireRuntimeVerify: true,
+          coachHintCount: createCoachHintCount,
+        });
+        if (coachObs) {
+          createCoachHintCount++;
+          log.warn('agent', 'Create Runtime coach hint', {
+            hint: createCoachHintCount,
+            remaining: task.maxSteps - i,
+          });
+          steps.push({
+            thought: 'Автоподсказка: Create Runtime → runtime_start',
+            action: 'strategy_hint',
+            input: { kind: 'create_runtime', n: createCoachHintCount },
+            observation: coachObs,
+            ts: Date.now(),
+          });
+          continue;
+        }
       }
 
       // Loop detection / stall recovery

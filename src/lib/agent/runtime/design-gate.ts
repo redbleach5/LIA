@@ -64,6 +64,7 @@ export async function runDesignGate(task: AgentTask): Promise<DesignGateResult |
   logger.info('agent', 'design gate proposed', {
     taskId: task.id.slice(0, 8),
     kind: design.kind,
+    preset: design.preset,
     stack: design.stack,
     written,
   });
@@ -78,7 +79,18 @@ export async function persistProjectDesign(
   if (!task.fsScope) {
     return { ok: false, error: 'Нет рабочей директории (fsScope) для манифеста' };
   }
-  const parsed = parseProjectDesign({ ...raw, createdBy: 'lia' });
+
+  // Locked presets (static-game / static-web): ignore model stack/tree/scripts.
+  const { resolveCreatePresetId, isLockedPreset, lockDesignToPreset } = await import('./presets');
+  const presetId = resolveCreatePresetId(task.goal);
+  const toParse: unknown = isLockedPreset(presetId)
+    ? lockDesignToPreset(task.goal, {
+      name: typeof raw.name === 'string' ? raw.name : undefined,
+      acceptance: typeof raw.acceptance === 'string' ? raw.acceptance : undefined,
+    })
+    : { ...raw, createdBy: 'lia' };
+
+  const parsed = parseProjectDesign(toParse);
   if (!parsed.ok) return parsed;
 
   try {
@@ -97,6 +109,13 @@ export async function persistProjectDesign(
     design: parsed.design,
     autoAccepted: true,
     ts: Date.now(),
+  });
+
+  logger.info('agent', 'design persisted', {
+    taskId: task.id.slice(0, 8),
+    preset: parsed.design.preset,
+    kind: parsed.design.kind,
+    locked: isLockedPreset(presetId),
   });
 
   return { ok: true, design: parsed.design };

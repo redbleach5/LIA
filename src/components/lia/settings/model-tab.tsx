@@ -8,14 +8,16 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Check, Loader2, AlertCircle } from 'lucide-react';
+import { Check, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { isOllamaLoopbackUrl, normalizeOllamaBaseUrl } from '@/lib/ollama-base-url';
 import type { Settings } from './types';
 import { describeEmbedModel } from './describe-embed-model';
 
 /** Embed / retrieval models must not appear in the chat picker. */
 const EMBED_MODEL_RE = /embed|nomic|minilm|e5-/i;
+const LOCAL_OLLAMA_URL = 'http://127.0.0.1:11434';
 
 function formatSettingsError(data: { error?: string; details?: Array<{ path?: string; message?: string }> }, status: number): string {
   if (data.error === 'validation failed' && Array.isArray(data.details) && data.details.length > 0) {
@@ -54,22 +56,35 @@ export function ModelTab({
   const [saving, setSaving] = useState(false);
 
   const chatModels = settings.availableModels.filter((m) => !EMBED_MODEL_RE.test(m));
+  const effectiveBase = normalizeOllamaBaseUrl(baseUrl) ?? baseUrl;
+  const isRemote = Boolean(effectiveBase) && !isOllamaLoopbackUrl(effectiveBase);
 
   const persist = async (overrides: {
     model?: string;
     agentModel?: string;
     embedModel?: string;
     baseUrl?: string;
-  } = {}, opts?: { quietSuccess?: boolean }) => {
+  } = {}, opts?: { quietSuccess?: boolean; connectionCheck?: boolean }) => {
     setSaving(true);
     try {
       const nextModel = overrides.model ?? model;
       const nextAgent = overrides.agentModel ?? agentModel;
       const nextEmbed = overrides.embedModel ?? embedModel;
-      const nextBase = overrides.baseUrl ?? baseUrl;
+      const rawBase = overrides.baseUrl ?? baseUrl;
+      const normalizedBase = rawBase.trim()
+        ? (normalizeOllamaBaseUrl(rawBase) ?? rawBase.trim())
+        : '';
+
+      if (rawBase.trim() && !normalizeOllamaBaseUrl(rawBase)) {
+        throw new Error('Некорректный хост Ollama. Пример: 192.168.1.50 или http://192.168.1.50:11434');
+      }
+
+      if (normalizedBase && normalizedBase !== baseUrl) {
+        setBaseUrl(normalizedBase);
+      }
 
       const body = {
-        baseUrl: nextBase || undefined,
+        baseUrl: normalizedBase || undefined,
         model: nextModel,
         agentModel: nextAgent,
         embedModel: nextEmbed === 'auto' ? '' : nextEmbed,
@@ -86,14 +101,23 @@ export function ModelTab({
         ollamaOk?: boolean;
         ollamaError?: string;
         model?: string;
+        baseUrl?: string;
       };
       if (!res.ok) {
         throw new Error(formatSettingsError(data, res.status));
       }
 
-      if (!opts?.quietSuccess) {
+      if (data.baseUrl) setBaseUrl(data.baseUrl);
+
+      if (opts?.connectionCheck) {
         if (data.ollamaOk) {
-          toast.success(`Сохранено (БД и .env) · чат: ${data.model || nextModel}`);
+          toast.success(`Ollama на связи · ${data.baseUrl || normalizedBase}`);
+        } else {
+          toast.warning(`Нет ответа от Ollama: ${data.ollamaError ?? 'unknown'}`);
+        }
+      } else if (!opts?.quietSuccess) {
+        if (data.ollamaOk) {
+          toast.success(`Сохранено · чат: ${data.model || nextModel}`);
         } else {
           toast.warning(`Модель записана, но Ollama не отвечает: ${data.ollamaError ?? 'unknown'}`);
         }
@@ -119,6 +143,23 @@ export function ModelTab({
     }
   };
 
+  const checkConnection = async () => {
+    try {
+      await persist({}, { connectionCheck: true });
+    } catch {
+      /* toast already shown */
+    }
+  };
+
+  const useLocalHost = () => {
+    setBaseUrl(LOCAL_OLLAMA_URL);
+  };
+
+  const onHostBlur = () => {
+    const normalized = normalizeOllamaBaseUrl(baseUrl);
+    if (normalized && normalized !== baseUrl) setBaseUrl(normalized);
+  };
+
   const pickChatModel = async (name: string) => {
     if (name === model) return;
     setModel(name);
@@ -134,7 +175,62 @@ export function ModelTab({
       <div className="rounded-md border border-border bg-surface/40 px-3 py-2 text-xs">
         <span className="text-text-dim">Сейчас в чате: </span>
         <span className="font-mono text-foreground">{model || '—'}</span>
-        <span className="text-text-dim"> · Ollama</span>
+        <span className="text-text-dim"> · Ollama{isRemote ? ' (удалённый)' : ''}</span>
+      </div>
+
+      {/* Ollama host — local or remote GPU box */}
+      <div className="space-y-1.5 rounded-md border border-border bg-surface/40 p-3">
+        <Label htmlFor="baseUrl" className="text-xs">Хост Ollama</Label>
+        <p className="text-[10px] text-text-dim leading-relaxed">
+          Лия на ноутбуке, модели на ПК с видеокартой — укажи IP этого ПК
+          (например <span className="font-mono">192.168.1.50</span>).
+          На том компьютере Ollama должна слушать сеть:
+          <span className="font-mono"> OLLAMA_HOST=0.0.0.0 ollama serve</span>.
+          Хост и модели сохраняются в настройках приложения (не в .env).
+        </p>
+        <Input
+          id="baseUrl"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          onBlur={onHostBlur}
+          placeholder="192.168.1.50 или http://192.168.1.50:11434"
+          className="text-sm font-mono"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <div className="flex flex-wrap gap-1.5 pt-0.5">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-[11px] px-2"
+            disabled={saving || baseUrl === LOCAL_OLLAMA_URL}
+            onClick={useLocalHost}
+          >
+            Этот компьютер
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-[11px] px-2"
+            disabled={saving || !baseUrl.trim()}
+            onClick={() => void checkConnection()}
+          >
+            {saving ? (
+              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3 h-3 mr-1" />
+            )}
+            Проверить связь
+          </Button>
+        </div>
+        {isRemote && (
+          <p className="text-[10px] text-text-dim">
+            Для бюджета VRAM на удалённой карте задай в .env{' '}
+            <span className="font-mono">LIA_INFERENCE_VRAM_GB</span> (ГБ видеокарты ПК).
+          </p>
+        )}
       </div>
 
       {/* Ollama health status */}
@@ -150,8 +246,10 @@ export function ModelTab({
         )} />
         <span className="flex-1">
           {settings.ollamaOk
-            ? `На связи · моделей для чата: ${chatModels.length}`
-            : 'Пока не удалось подключиться. Проверь, что локальный движок запущен.'}
+            ? `На связи${isRemote ? ` · ${effectiveBase}` : ''} · моделей для чата: ${chatModels.length}`
+            : isRemote
+              ? `Нет связи с ${effectiveBase || 'удалённым хостом'}. Проверь IP, firewall и OLLAMA_HOST=0.0.0.0.`
+              : 'Пока не удалось подключиться. Проверь, что Ollama запущена на этом компьютере.'}
         </span>
       </div>
 
@@ -197,27 +295,6 @@ export function ModelTab({
           Ручной ввод — нажми «Сохранить» ниже
         </p>
       </div>
-
-      <details className="rounded-md border border-border bg-surface/40 p-3">
-        <summary className="text-xs font-medium cursor-pointer text-foreground">
-          Дополнительно
-        </summary>
-        <div className="mt-3 space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="baseUrl" className="text-xs">Адрес локального движка</Label>
-            <Input
-              id="baseUrl"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="http://127.0.0.1:11434"
-              className="text-sm font-mono"
-            />
-            <p className="text-[10px] text-text-dim">
-              Обычно менять не нужно
-            </p>
-          </div>
-        </div>
-      </details>
 
       <Button onClick={() => void saveModel()} disabled={saving} className="w-full" size="sm">
         {saving ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> : null}

@@ -151,9 +151,19 @@ describe('updateSettingsSchema', () => {
     expect(result.data.baseUrl).toBe('http://127.0.0.1:11434');
   });
 
+  it('normalizes bare LAN IP to http://ip:11434', () => {
+    const result = updateSettingsSchema.safeParse({
+      baseUrl: '192.168.1.50',
+      model: 'qwen2.5:7b',
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.baseUrl).toBe('http://192.168.1.50:11434');
+  });
+
   it('rejects invalid baseUrl', () => {
     const result = updateSettingsSchema.safeParse({
-      baseUrl: 'not-a-url',
+      baseUrl: 'not a url',
       model: 'qwen2.5:7b',
     });
     expect(result.success).toBe(false);

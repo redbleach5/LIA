@@ -9,6 +9,7 @@ import { AgentWorkspaceModeSelector } from '@/components/lia/agent-workspace-mod
 import { ChatAttachButton, PendingAttachmentChips } from '@/components/lia/chat-attachments';
 import { cn } from '@/lib/utils';
 import { ArrowUp, Square } from 'lucide-react';
+import { cueAvatarGesture, cueAvatarLook } from '@/lib/avatar-cues';
 
 type ChatInputProps = {
   onSend: (text: string, mode: ChatMode) => void;
@@ -90,6 +91,8 @@ export function ChatInput({
     const t = text.trim();
     const hasFiles = pendingAttachments.length > 0;
     if ((!t && !hasFiles) || isStreaming || disabled || uploading) return;
+    cueAvatarLook('chat', 3.5);
+    cueAvatarGesture('nod');
     onSend(t, mode);
     setText('');
     setHasSent(true);
@@ -179,8 +182,14 @@ export function ChatInput({
             value={text}
             onChange={e => setText(e.target.value)}
             onKeyDown={handleKey}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
+            onFocus={() => {
+              setFocused(true);
+              cueAvatarLook('composer', 4);
+            }}
+            onBlur={() => {
+              setFocused(false);
+              cueAvatarLook('user', 1.2);
+            }}
             placeholder={
               disabled
                 ? 'Создай чат, чтобы начать…'

@@ -48,7 +48,7 @@ type AvatarAnimationConfig = {
   bodySway: boolean;        // покачивание всем телом (бёдра + плечи)
   armSway: boolean;         // микро-движения рук (как при ходьбе на месте)
   weightShift: boolean;     // перенос веса с ноги на ногу (медленный цикл)
-  gazeFollow: boolean;      // взгляд следует за курсором мыши (если в фокусе)
+  gazeFollow: boolean;      // взгляд на UI (composer/chat) + idle glance — без курсора
   lipSync: boolean;         // липсинк во время стриминга ответа
   emotionMorph: boolean;    // плавная интерполяция эмоций (happy/sad/angry/...)
   emotionPose: boolean;     // изменения позы под эмоцию (joy → лёгкий наклон, sadness → плечи вниз)
@@ -78,74 +78,62 @@ export type AvatarConfig = {
 };
 
 // ============================================================================
-// Пресеты камеры — подобраны под реальные габариты Lia.vrm
-// (высота 1.666m от Y=0 до Y=1.666, ширина в T-pose 1.336m).
-// hips на Y≈0.95, голова на Y≈1.55.
-// Формула: видимая высота ≈ 2 * d * tan(FOV/2).
+// Пресеты камеры — под head ≈ REFERENCE_HEAD_Y (1.45 m) после vrm/layout.
+// hips ≈ 1.0, голова ≈ 1.45. Формула: видимая высота ≈ 2 * d * tan(FOV/2).
 // ============================================================================
 export const CAMERA_PRESETS: Record<Exclude<CameraPreset, 'custom'>, Omit<AvatarCameraConfig, 'preset'>> = {
-  // По грудь — не macro: голова + плечи + верх торса в высокой колонке.
   portrait: {
-    position: [0, 1.22, 1.12],
-    target:   [0, 1.04, 0],
-    fov: 38,
+    position: [0, 1.32, 1.28],
+    target:   [0, 1.22, 0],
+    fov: 36,
   },
   fullbody: {
-    position: [0, 0.96, 2.45],
-    target:   [0, 0.80, 0],
-    fov: 48,
+    position: [0, 0.95, 2.55],
+    target:   [0, 0.85, 0],
+    fov: 46,
   },
   closeup: {
-    position: [0, 1.30, 0.98],
-    target:   [0, 1.20, 0],
-    fov: 32,
+    position: [0, 1.42, 1.05],
+    target:   [0, 1.38, 0],
+    fov: 30,
   },
 };
 
-/**
- * Камера для боковой колонки — чуть дальше factory-пресета, если пользователь не крутил слайдеры.
- * Tuned для узкой вертикальной колонки (~320×820px): больший Z-отступ + меньший FOV
- * дают более портретный вид, модель центрирована и хорошо видна.
- */
+/** Боковая колонка — лицо в центре узкого кадра. */
 const SIDEBAR_CAMERA_PRESETS: Record<Exclude<CameraPreset, 'custom'>, Omit<AvatarCameraConfig, 'preset'>> = {
   portrait: {
-    position: [0, 1.20, 1.42],   // Z: 1.28 → 1.42 — чуть дальше, чтобы вся голова+плечи в кадре
-    target:   [0, 1.05, 0],       // Y: 0.98 → 1.05 — выше target, лицо по центру
-    fov: 36,                       // 40 → 36 — меньше искажений, крупнее план
-  },
-  fullbody: {
-    position: [0, 1.00, 2.80],   // Z: 2.65 → 2.80 — чуть дальше
-    target:   [0, 0.82, 0],
-    fov: 48,                       // 50 → 48 — чуть меньше искажений
-  },
-  closeup: {
-    position: [0, 1.28, 1.18],   // Z: 1.08 → 1.18 — чуть дальше
-    target:   [0, 1.18, 0],
-    fov: 30,                       // 34 → 30 — крупнее лицо
-  },
-};
-
-/**
- * Камера для кружка CompanionPortrait (~88–160px).
- * Используется только когда пользователь не трогал слайдеры (factory-пресет).
- * Иначе берём config.camera как есть — настройки из «Внешний вид» должны работать и здесь.
- */
-const COMPACT_CAMERA_PRESETS: Record<Exclude<CameraPreset, 'custom'>, Omit<AvatarCameraConfig, 'preset'>> = {
-  portrait: {
-    position: [0, 1.34, 1.12],
-    target:   [0, 1.26, 0],
+    position: [0, 1.36, 1.58],
+    target:   [0, 1.28, 0],
     fov: 34,
   },
   fullbody: {
-    // В круге fullbody бесполезен — кадрируем ближе к портрету
-    position: [0, 1.28, 1.35],
-    target:   [0, 1.12, 0],
-    fov: 36,
+    position: [0, 1.00, 2.85],
+    target:   [0, 0.88, 0],
+    fov: 46,
   },
   closeup: {
-    position: [0, 1.38, 1.00],
-    target:   [0, 1.32, 0],
+    position: [0, 1.40, 1.22],
+    target:   [0, 1.36, 0],
+    fov: 28,
+  },
+};
+
+/** Кружок CompanionPortrait. */
+const COMPACT_CAMERA_PRESETS: Record<Exclude<CameraPreset, 'custom'>, Omit<AvatarCameraConfig, 'preset'>> = {
+  portrait: {
+    position: [0, 1.40, 1.05],
+    target:   [0, 1.36, 0],
     fov: 32,
+  },
+  fullbody: {
+    position: [0, 1.36, 1.25],
+    target:   [0, 1.28, 0],
+    fov: 34,
+  },
+  closeup: {
+    position: [0, 1.42, 0.95],
+    target:   [0, 1.40, 0],
+    fov: 30,
   },
 };
 
@@ -166,11 +154,14 @@ function usesFactoryCamera(cam: AvatarCameraConfig): boolean {
   if (vecNear(cam.position, factory.position) && vecNear(cam.target, factory.target)) {
     return Math.abs(cam.fov - factory.fov) <= 1;
   }
-  // Legacy: старый tight portrait [0, 1.36, 0.72] / [0, 1.38, 0.82] и т.п.
+  // Legacy: старые portrait-позиции до head-based framing.
   const legacyPortraitPositions: [number, number, number][] = [
     [0, 1.36, 0.72],
     [0, 1.38, 0.82],
     [0, 1.52, 0.58],
+    [0, 1.22, 1.12],
+    [0, 1.20, 1.42],
+    [0, 1.28, 1.18],
   ];
   if (cam.preset === 'portrait' && legacyPortraitPositions.some(p => vecNear(cam.position, p))) {
     return true;
@@ -264,7 +255,7 @@ export const DEFAULT_AVATAR_CONFIG: AvatarConfig = {
     lipSync: true,
     emotionMorph: true,
     emotionPose: true,
-    idleFrequency: 1.0,
+    idleFrequency: 1.25,
   },
   body: {
     armPose: 'natural',

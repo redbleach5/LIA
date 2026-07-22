@@ -14,7 +14,8 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { db } from './db';
 import { logger } from './logger';
 import { resolveAgentModelName } from './llm/resolve-agent-model';
-import { reconcileOllamaEnvAndDb, syncOllamaEnvFileAfterSave } from './infra/ollama-env-sync';
+import { reconcileOllamaEnvAndDb, mirrorOllamaToProcessEnv } from './infra/ollama-env-sync';
+import { normalizeOllamaBaseUrl } from './ollama-base-url';
 
 // ============================================================================
 // Settings persistence — load from DB on first call.
@@ -117,7 +118,7 @@ export async function reloadSettings(): Promise<void> {
   await loadSettings();
 }
 
-/** Seed DB from .env on first run, or mirror DB → .env so CLI/diagnose match the UI. */
+/** Seed DB from .env on first run; otherwise mirror DB settings into process.env. */
 export async function ensureOllamaEnvDbReconciled(): Promise<void> {
   await loadSettings();
   await reconcileOllamaEnvAndDb({
@@ -151,7 +152,8 @@ export async function setOllamaSettings(params: {
   settingsLoadedAt = Date.now();
 
   if (params.baseUrl !== undefined) {
-    currentBaseUrl = params.baseUrl.replace(/\/$/, '');
+    const normalized = normalizeOllamaBaseUrl(params.baseUrl);
+    currentBaseUrl = (normalized ?? params.baseUrl).replace(/\/$/, '');
     await db.setting.upsert({
       where: { key: 'ollama_base_url' },
       create: { key: 'ollama_base_url', value: currentBaseUrl },
@@ -193,7 +195,7 @@ export async function setOllamaSettings(params: {
     }
   }
   healthCache = null;
-  syncOllamaEnvFileAfterSave({
+  mirrorOllamaToProcessEnv({
     baseUrl: currentBaseUrl,
     model: currentModel,
     agentModel: currentAgentModel,

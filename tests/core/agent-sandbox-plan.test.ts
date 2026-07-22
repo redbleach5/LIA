@@ -70,10 +70,9 @@ describe('sandbox + fallbackPlan', () => {
     expect(plan.steps.some(s => /search_sources|list_sources/i.test(s))).toBe(true);
   });
 
-  it('fallbackPlan for create-from-scratch uses design + write + runtime', () => {
+  it('fallbackPlan for create-from-scratch uses write + runtime (static preset)', () => {
     const plan = fallbackPlan(fakeTask('Напиши игру тетрис в неоновом стиле'));
-    expect(plan.steps.some(s => /propose_design/i.test(s))).toBe(true);
-    expect(plan.steps.some(s => /write_file/i.test(s))).toBe(true);
+    expect(plan.steps.some(s => /write_file|index\.html/i.test(s))).toBe(true);
     expect(plan.steps.some(s => /runtime_start/i.test(s))).toBe(true);
     expect(plan.steps.some(s => /проанализировать задачу/i.test(s))).toBe(false);
   });

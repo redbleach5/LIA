@@ -8,6 +8,7 @@ import 'server-only';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z, type ZodType } from 'zod';
+import { normalizeOllamaBaseUrl } from '@/lib/ollama-base-url';
 
 /**
  * Распарсить body запроса через zod schema.
@@ -144,12 +145,21 @@ export const upsertEpisodeWorkspaceSchema = z.object({
 // baseUrl: empty string is treated as "omit" — the Model tab always sends
 // baseUrl, and a cleared input must not fail the whole save (otherwise model
 // selection looks broken: toast "validation failed", DB unchanged).
+// Bare LAN IP / host (e.g. 192.168.1.50) is normalized to http://host:11434.
 export const updateSettingsSchema = z.object({
   baseUrl: z
     .string()
     .optional()
-    .transform((v) => (v == null || v.trim() === '' ? undefined : v.trim()))
-    .pipe(z.string().url().optional()),
+    .transform((v) => {
+      if (v == null || v.trim() === '') return undefined;
+      return normalizeOllamaBaseUrl(v);
+    })
+    .pipe(
+      z.union([
+        z.undefined(),
+        z.string().url({ message: 'invalid Ollama host URL' }),
+      ]),
+    ),
   model: z.string().optional(),
   /** Empty string = agent uses the same model as chat. */
   agentModel: z.string().optional(),
