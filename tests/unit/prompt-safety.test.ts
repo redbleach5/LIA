@@ -80,6 +80,27 @@ describe('prompt-safety: extractJson', () => {
     );
     expect(result).toEqual({ a: 1, b: 2 });
   });
+
+  it('strips reasoning wrappers before parsing (model-agnostic)', () => {
+    const result = extractJson<{ action: string }>(
+      '<think>I will output {"action":"wrong"} maybe</think>\n{"action":"help","desiredTone":"warm"}',
+      { requireKeys: ['action'] },
+    );
+    expect(result).toEqual({ action: 'help', desiredTone: 'warm' });
+  });
+
+  it('skips decoy objects without requireKeys match', () => {
+    const result = extractJson<{ action: string; confidence: number }>(
+      'notes {"foo":1} then {"action":"emotional_response","confidence":0.6}',
+      { requireKeys: ['action'] },
+    );
+    expect(result).toEqual({ action: 'emotional_response', confidence: 0.6 });
+  });
+
+  it('extracts from markdown fences', () => {
+    const result = extractJson<{ ok: boolean }>('```json\n{"ok": true}\n```');
+    expect(result).toEqual({ ok: true });
+  });
 });
 
 describe('prompt-safety: escapeForPrompt', () => {

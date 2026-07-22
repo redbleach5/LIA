@@ -17,16 +17,21 @@ function matchesPatterns(text: string, patterns: RegExp[]): boolean {
   return patterns.some(p => p.test(lower));
 }
 
-// Trivial — greetings, thanks, acknowledgements
-// P2-1 fix (M-X-6): use Unicode property escapes instead of \b.
-// JavaScript \b is based on ASCII \w — does NOT work for Cyrillic letters.
-// (?<![\p{L}\p{N}]) and (?![\p{L}\p{N}]) with the `u` flag work for all scripts.
+// Trivial — greetings, thanks, acknowledgements, light social
 const TRIVIAL_PATTERNS = [
   /^(привет|здравствуй|здравствуйте|хай|hi|hello|приветик)(?![\p{L}\p{N}])/iu,
   /^(пока|до свидания|bye|goodbye|увидимся)(?![\p{L}\p{N}])/iu,
   /^(спасибо|благодарю|thanks|thank you|спс)(?![\p{L}\p{N}])/iu,
   /^(ок|окей|хорошо|ладно|да|нет|угу|ага)(?![\p{L}\p{N}])/iu,
   /^(как дела|как ты|что делаешь|как настроение)(?![\p{L}\p{N}])/iu,
+  /^(расскажи|пошути|давай).{0,40}(шутк|анекдот)/iu,
+];
+
+/** Companion smalltalk without real work — keep 1-call plans on plus/max. */
+const SOCIAL_CHATTER_STEMS = [
+  'шутк', 'анекдот', 'пошути', 'поболта', 'поговорим', 'просто сказала',
+  'не хочу', 'не надо', 'спасибо', 'ты умница', 'как меня зовут',
+  'расскажи о себе', 'расскажи про себя', 'давай о тебе', 'про тебя',
 ];
 
 // Research — needs information gathering (web search, file analysis)
@@ -188,16 +193,34 @@ export function classifyTaskComplexity(message: string): TaskComplexity {
     return 'trivial';
   }
 
+  // Explicit social / ack — never pay deliberate×2 on companion chat.
+  // Do not swallow real questions that only start with «привет».
+  if (text.length < 160 && hasStem(lower, SOCIAL_CHATTER_STEMS)) {
+    return text.includes('?') ? 'simple' : 'trivial';
+  }
+  if (
+    text.length < 80
+    && TRIVIAL_PATTERNS.some(p => p.test(text))
+    && !text.includes('?')
+  ) {
+    return 'trivial';
+  }
+
   // Check patterns in order of complexity
   if (hasStem(lower, RESEARCH_STEMS)) return 'research';
   if (hasStem(lower, COMPLEX_STEMS) || matchesPatterns(lower, COMPLEX_MATH_PATTERNS)) return 'complex';
 
-  // Long message without complexity markers — moderate
+  // Long message without complexity markers — moderate (real multi-part asks)
   if (text.length > 500) return 'moderate';
 
   // Has question — simple
   if (text.includes('?')) return 'simple';
 
-  // Default
-  return 'moderate';
+  // Mid-length statement / request without research markers:
+  // default simple (1 call). Reserve moderate for clearly multi-part work.
+  if (text.length > 220 || (text.match(/[.!?…]/g) ?? []).length >= 3) {
+    return 'moderate';
+  }
+
+  return 'simple';
 }

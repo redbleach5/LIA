@@ -39,4 +39,18 @@ describe('needsProactiveWebSearch', () => {
   it('short Cyrillic acronym is simple, not trivial', () => {
     expect(classifyTaskComplexity('интересует СМСВ')).toBe('simple');
   });
+
+  it('social chatter stays trivial/simple — not moderate (no deliberate×2)', () => {
+    expect(classifyTaskComplexity('Спасибо 😁')).toBe('trivial');
+    expect(classifyTaskComplexity('Расскажи мне шутку))')).toBe('trivial');
+    expect(classifyTaskComplexity('Давай поговорим о тебе')).toBe('trivial');
+    expect(['trivial', 'simple']).toContain(
+      classifyTaskComplexity('Мужа не будет с нами)) Я сказала, что он будет на работе. Но спасибо!'),
+    );
+  });
+
+  it('mid-length creative ask without ? is simple, not default moderate', () => {
+    const msg = 'Завтра хочу снять тихий влог: прогулка и цветочный магазин';
+    expect(classifyTaskComplexity(msg)).toBe('simple');
+  });
 });

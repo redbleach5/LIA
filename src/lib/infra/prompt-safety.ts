@@ -16,54 +16,103 @@ import 'server-only';
  */
 
 /**
+ * Strip reasoning / CoT wrappers many local models emit before the real answer.
+ * Vendor-agnostic: XML-ish think tags, redacted blocks, markdown fences.
+ * Does not target a specific model family.
+ */
+export function stripModelReasoningArtifacts(text: string): string {
+  if (!text) return '';
+  let out = text;
+  // Closed reasoning blocks (think / thinking / reasoning / reflection, …)
+  out = out.replace(
+    /<\s*(think|thinking|reasoning|reflection|redacted_reasoning)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi,
+    '\n',
+  );
+  // Orphaned open tag with no close — drop until end-ish content after a blank line + `{`
+  out = out.replace(
+    /<\s*(think|thinking|reasoning|reflection)[^>]*>[\s\S]*?(?=\n\s*\{|\n\s*```|$)/gi,
+    '\n',
+  );
+  // Markdown fenced JSON / generic fences — keep inner body
+  out = out.replace(/```(?:json|JSON)?\s*([\s\S]*?)```/g, '\n$1\n');
+  return out.trim();
+}
+
+export type ExtractJsonOptions = {
+  /** Prefer a parsed object that has all of these own keys (e.g. monologue `action`). */
+  requireKeys?: readonly string[];
+};
+
+function hasRequiredKeys(value: unknown, keys: readonly string[]): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  return keys.every((k) => Object.prototype.hasOwnProperty.call(obj, k));
+}
+
+/**
  * Extract the first balanced JSON object from a text string.
  *
  * Strategy:
- *   1. Find the first `{` in the text.
- *   2. Walk forward, counting `{` and `}` (ignoring those inside strings).
- *   3. When the count returns to zero, return that substring.
- *   4. If no balanced object is found, fall back to non-greedy regex.
+ *   0. Strip common reasoning wrappers / fences (model-agnostic).
+ *   1. Find `{` candidates; brace-balance + parse.
+ *   2. If requireKeys set, prefer objects that include them (skip CoT pseudo-JSON).
+ *   3. Repair trailing commas as last resort.
  *
  * @returns the parsed JSON object, or null if no valid JSON was found.
  */
-export function extractJson<T = unknown>(text: string): T | null {
+export function extractJson<T = unknown>(
+  text: string,
+  opts?: ExtractJsonOptions,
+): T | null {
   if (!text) return null;
 
-  const startIdx = text.indexOf('{');
-  if (startIdx === -1) return null;
+  const normalized = stripModelReasoningArtifacts(text);
+  const requireKeys = opts?.requireKeys;
+  let fallback: T | null = null;
 
-  // Try brace-balanced extraction first.
-  const balanced = extractBalancedJson(text, startIdx);
-  if (balanced !== null) {
+  const consider = (raw: string): T | null => {
     try {
-      return JSON.parse(balanced) as T;
-    } catch {
-      // Fall through to regex fallback
-    }
-  }
-
-  // Fallback: H10 fix — try progressively larger substrings for nested objects.
-  for (let startIdx = text.indexOf('{'); startIdx !== -1; startIdx = text.indexOf('{', startIdx + 1)) {
-    for (let endIdx = text.lastIndexOf('}'); endIdx > startIdx; endIdx = text.lastIndexOf('}', endIdx - 1)) {
-      const candidate = text.slice(startIdx, endIdx + 1);
-      try {
-        return JSON.parse(candidate) as T;
-      } catch {
-        // try next endIdx
+      const parsed = JSON.parse(raw) as T;
+      if (requireKeys?.length) {
+        if (hasRequiredKeys(parsed, requireKeys)) return parsed;
+        if (fallback === null) fallback = parsed;
+        return null;
       }
-    }
-  }
-
-  // Last resort: repair trailing commas on balanced match.
-  const balancedRetry = extractBalancedJson(text, text.indexOf('{'));
-  if (balancedRetry) {
-    const repaired = balancedRetry
-      .replace(/,\s*}/g, '}')
-      .replace(/,\s*]/g, ']');
-    try {
-      return JSON.parse(repaired) as T;
+      return parsed;
     } catch {
       return null;
+    }
+  };
+
+  // Walk every `{` start — first matching requireKeys wins; else first valid object.
+  for (let startIdx = normalized.indexOf('{'); startIdx !== -1; startIdx = normalized.indexOf('{', startIdx + 1)) {
+    const balanced = extractBalancedJson(normalized, startIdx);
+    if (!balanced) continue;
+    const hit = consider(balanced);
+    if (hit !== null) return hit;
+  }
+
+  // Progressive endIdx fallback (nested / noisy tails)
+  for (let startIdx = normalized.indexOf('{'); startIdx !== -1; startIdx = normalized.indexOf('{', startIdx + 1)) {
+    for (let endIdx = normalized.lastIndexOf('}'); endIdx > startIdx; endIdx = normalized.lastIndexOf('}', endIdx - 1)) {
+      const hit = consider(normalized.slice(startIdx, endIdx + 1));
+      if (hit !== null) return hit;
+    }
+  }
+
+  if (fallback !== null) return fallback;
+
+  // Last resort: repair trailing commas on first balanced match.
+  const firstBrace = normalized.indexOf('{');
+  if (firstBrace !== -1) {
+    const balancedRetry = extractBalancedJson(normalized, firstBrace);
+    if (balancedRetry) {
+      const repaired = balancedRetry
+        .replace(/,\s*}/g, '}')
+        .replace(/,\s*]/g, ']');
+      const hit = consider(repaired);
+      if (hit !== null) return hit;
+      if (fallback !== null) return fallback;
     }
   }
 

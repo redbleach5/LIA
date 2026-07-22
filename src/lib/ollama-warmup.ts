@@ -15,17 +15,25 @@ import 'server-only';
 //   2. Every 4 minutes, fire another dummy call. OLLAMA_KEEP_ALIVE defaults
 //      to 5 min, so 4 min heartbeat keeps models warm indefinitely.
 //
+// Remote Ollama (LAN GPU box):
+//   Idle Mac UI must NOT pin large chat weights on the workstation forever —
+//   that saturates remote VRAM while nobody chats. Default: warm embed only;
+//   pin chat with LIA_WARMUP_REMOTE_CHAT=true if you want zero cold-start.
+//
 // Tunable via env:
 //   LIA_WARMUP_ENABLED=false  → disable entirely (default: enabled)
 //   LIA_WARMUP_INTERVAL_MS=240000 → heartbeat interval (default: 4 min)
+//   LIA_WARMUP_REMOTE_CHAT=true → also preload chat model on non-loopback hosts
 //
 // HMR-safe: heartbeat timer stored on globalThis, survives dev hot-reload.
 // Process exit: timer is .unref()'d — does not prevent Node shutdown.
 
 import { logger } from './logger';
+import { isOllamaLoopbackUrl } from './ollama-base-url';
 
 const WARMUP_ENABLED = process.env.LIA_WARMUP_ENABLED !== 'false';
 const WARMUP_INTERVAL_MS = parseInt(process.env.LIA_WARMUP_INTERVAL_MS ?? '240000', 10);
+const WARMUP_REMOTE_CHAT = process.env.LIA_WARMUP_REMOTE_CHAT === 'true';
 
 const globalKey = '__lia_ollama_warmup__';
 const g = globalThis as unknown as { [key: string]: unknown };
@@ -143,15 +151,28 @@ async function warmupPass(reason: 'preload' | 'heartbeat'): Promise<void> {
   const settings = await getOllamaSettings();
   const state = getState();
   let didSomething = false;
+  const remote = !isOllamaLoopbackUrl(settings.baseUrl);
+  // Local Ollama: pin chat. Remote GPU box: don't keep 14B+ resident while the
+  // Mac UI is idle (was driving critical VRAM pressure on the workstation).
+  const pinChat = !remote || WARMUP_REMOTE_CHAT;
 
   // Warm up chat model if name changed or never preloaded.
-  if (settings.model && state.preloadCalledFor.chatModel !== settings.model) {
-    logger.info('ollama', `Preloading chat model: ${settings.model}`, { reason });
+  if (
+    pinChat
+    && settings.model
+    && state.preloadCalledFor.chatModel !== settings.model
+  ) {
+    logger.info('ollama', `Preloading chat model: ${settings.model}`, { reason, remote });
     const ok = await warmupChatModel(settings.baseUrl, settings.model);
     if (ok) {
       state.preloadCalledFor.chatModel = settings.model;
       didSomething = true;
     }
+  } else if (remote && !pinChat && reason === 'preload') {
+    logger.info('ollama', 'Remote Ollama — skip chat preload (set LIA_WARMUP_REMOTE_CHAT=true to pin)', {
+      baseUrl: settings.baseUrl,
+      model: settings.model,
+    });
   }
 
   // Warm up embed model if name changed or never preloaded.

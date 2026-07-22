@@ -26,6 +26,19 @@ describe('classifyIntent (companion cues)', () => {
     expect(classifyIntent('Как дела?')).toBe('trivial');
     expect(classifyIntent('привет')).toBe('trivial');
   });
+
+  it('classifies thanks / jokes as trivial, not learning', () => {
+    expect(classifyIntent('Спасибо 😁')).toBe('trivial');
+    expect(classifyIntent('Расскажи мне шутку))')).toBe('trivial');
+  });
+
+  it('classifies talk-about-you as emotional, not learning', () => {
+    expect(classifyIntent('Давай поговорим о тебе')).toBe('emotional');
+  });
+
+  it('does not default general chat to learning', () => {
+    expect(classifyIntent('Муж на работе, снимаем вдвоём')).toBe('complex');
+  });
 });
 
 describe('shouldRunInnerMonologue (P1b routing)', () => {
@@ -48,6 +61,12 @@ describe('shouldRunInnerMonologue (P1b routing)', () => {
     })).toBe(false);
     expect(shouldRunInnerMonologue({
       ...base, tier: 'plus', intent: 'learning', isTrivialHowAreYou: true,
+    })).toBe(false);
+  });
+
+  it('never on trivial intent even on plus', () => {
+    expect(shouldRunInnerMonologue({
+      ...base, tier: 'plus', intent: 'trivial',
     })).toBe(false);
   });
 

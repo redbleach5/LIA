@@ -67,28 +67,41 @@ export function classifyIntent(message: string): LiaIntent {
     return 'urgent';
   }
 
-  // Emotional / relational — чувства, поддержка, «просто поговорить»
-  // Stems (поддерж*, скуча*, …) intentionally open-ended; «рад» is whole-token.
+  // Emotional / relational — чувства, поддержка, «просто поговорить», усталость
   if (new RegExp(
-    `${TOKEN_START}(?:грустно|плохо|тоскливо|одиноко|страшно|боюсь|злюсь|бесит|устал\\p{L}*|надоело|счастлив\\p{L}*|рад${TOKEN_END}|люблю|тяжело|тревожн\\p{L}*|плач\\p{L}*|скуча\\p{L}*|обними|поддерж\\p{L}*|поговор\\p{L}*|поболта\\p{L}*|как ты себя|мне не|расстроен\\p{L}*|обидел\\p{L}*|обид\\p{L}*|волнуюсь|пережива\\p{L}*)`,
+    `${TOKEN_START}(?:грустно|плохо|тоскливо|одиноко|страшно|боюсь|злюсь|бесит|устал\\p{L}*|надоело|счастлив\\p{L}*|рад${TOKEN_END}|люблю|тяжело|тревожн\\p{L}*|плач\\p{L}*|скуча\\p{L}*|обними|поддерж\\p{L}*|поговор\\p{L}*|поболта\\p{L}*|как ты себя|мне не|расстроен\\p{L}*|обидел\\p{L}*|обид\\p{L}*|волнуюсь|пережива\\p{L}*|прости|извини|о себе|про тебя|расскажи.*(о|про)\\s*себ)`,
     'iu',
   ).test(lower)) {
     return 'emotional';
   }
 
-  // Learning — вопросы «как работает», «почему»
-  // Trivial («как дела») проверяем РАНЬШЕ: иначе ^как ловит smalltalk как learning.
-  if (length < 30 && new RegExp(
+  // Social smalltalk — thanks / ack / jokes (before «расскажи»→learning)
+  if (new RegExp(
+    `${TOKEN_START}(?:спасибо|благодар\\p{L}*|thanks|thank you|спс|шутк\\p{L}*|анекдот|пошути|рассмеши|ok\\b|окей|ладно|угу|ага)${TOKEN_END}`,
+    'iu',
+  ).test(lower) && length < 120) {
+    return 'trivial';
+  }
+
+  // Trivial — короткие приветствия / «как дела»
+  if (length < 40 && new RegExp(
     `${TOKEN_START}(?:что делаешь|как дела|привет|hi|hello|здравствуй)${TOKEN_END}`,
     'iu',
   ).test(lower)) {
     return 'trivial';
   }
 
+  // Learning — вопросы «как работает», «почему» (не шутки / не «расскажи о себе»)
   if (new RegExp(
-    `^(?:как|почему|что такое|объясни|расскажи|помоги понять|в чём разница)${TOKEN_END}`,
+    `^(?:как|почему|что такое|объясни|помоги понять|в чём разница)${TOKEN_END}`,
     'iu',
   ).test(lower)) {
+    return 'learning';
+  }
+  if (
+    new RegExp(`^(?:расскажи)${TOKEN_END}`, 'iu').test(lower)
+    && !/(?:шутк|анекдот|о себе|про себя|про тебя)/i.test(lower)
+  ) {
     return 'learning';
   }
 
@@ -105,7 +118,8 @@ export function classifyIntent(message: string): LiaIntent {
     return 'complex';
   }
 
-  return 'learning';  // default — treat as learning question
+  // Default: general chat — NOT learning (fallback tree uses warm help)
+  return 'complex';
 }
 
 // ============================================================================
@@ -135,8 +149,9 @@ const STANDARD_MONOLOGUE_TRIGGERS = new Set([
  * Policy (P1b / PRIORITIES):
  *   - micro: never (budget)
  *   - trivial greeting / how-are-you short-circuit: never
+ *   - trivial intent (thanks / ack / joke): never — fallback tree is enough
  *   - agent mode: never (task path)
- *   - plus/max: always
+ *   - plus/max: always otherwise
  *   - standard: companion-critical only (emotional/urgent intent OR strong
  *     affective perceive triggers) — keep latency low on instruction/learning
  */
@@ -162,6 +177,7 @@ export function shouldRunInnerMonologue(params: {
   } = params;
 
   if (isTrivialGreeting || isTrivialHowAreYou) return false;
+  if (intent === 'trivial') return false;
   if (isAgent) return false;
   if (tier === 'micro') return false;
   if (isAcquaintanceRequest) return true;
@@ -263,6 +279,8 @@ export async function decideHowToRespond(params: {
 
 /**
  * LLM call для inner monologue.
+ * Model-agnostic: enough output budget for CoT-then-JSON models, strip
+ * reasoning wrappers, prefer objects with `action`, one strict retry.
  */
 async function innerMonologueLlmCall(params: {
   userMessage: string;
@@ -293,38 +311,62 @@ async function innerMonologueLlmCall(params: {
     estTokens: estimateTokens(prompt),
   });
 
+  const { extractJson } = await import('@/lib/infra/prompt-safety');
+
+  const toDecision = (raw: string): LiaDecision | null => {
+    const parsed = extractJson<Omit<LiaDecision, 'decidedAt'>>(raw, {
+      requireKeys: ['action'],
+    });
+    if (!parsed) return null;
+    if (!LIA_ACTIONS.includes(parsed.action as typeof LIA_ACTIONS[number])) {
+      return null;
+    }
+    return {
+      action: parsed.action as LiaDecision['action'],
+      desiredTone: (LIA_TONES.includes(parsed.desiredTone as typeof LIA_TONES[number])
+        ? parsed.desiredTone
+        : 'warm') as LiaDecision['desiredTone'],
+      willingnessToHelp: Math.max(0, Math.min(1, Number(parsed.willingnessToHelp) || 0.5)),
+      emotionalExpression: (LIA_EMOTIONS.includes(parsed.emotionalExpression as typeof LIA_EMOTIONS[number])
+        ? parsed.emotionalExpression
+        : 'neutral') as LiaDecision['emotionalExpression'],
+      motivation: parsed.motivation || '',
+      confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || 0.5)),
+      decidedAt: Date.now(),
+    };
+  };
+
+  // Budget for models that emit reasoning tokens before JSON (any vendor).
   const result = await generateText({
     model,
     prompt,
-    maxOutputTokens: 300,
-    temperature: 0.6,  // немного креативности для естественного решения
+    maxOutputTokens: 1024,
+    temperature: 0.35,
     abortSignal: AbortSignal.timeout(INNER_MONOLOGUE_TIMEOUT_MS),
   });
 
-  // P-CORE-27 fix: use shared `extractJson` (brace-balanced, string-aware)
-  // instead of greedy `\{[\s\S]*\}` regex that failed on trailing prose.
-  const { extractJson } = await import('@/lib/infra/prompt-safety');
-  const parsed = extractJson<Omit<LiaDecision, 'decidedAt'>>(result.text);
-  if (!parsed) {
-    throw new Error('Inner monologue did not return JSON');
-  }
+  let decision = toDecision(result.text);
+  if (decision) return decision;
 
-  // Validate + clamp — keys from decision.ts label maps (single source of truth)
-  if (!LIA_ACTIONS.includes(parsed.action as typeof LIA_ACTIONS[number])) {
-    throw new Error(`Invalid action: ${parsed.action}`);
-  }
+  // Strict retry once — still no vendor-specific flags; just a tighter contract.
+  logger.debug('chat', 'Inner monologue JSON miss — strict retry', {
+    preview: result.text.slice(0, 160),
+  });
+  const retry = await generateText({
+    model,
+    prompt:
+      `Верни ТОЛЬКО один JSON-объект (без markdown, без рассуждений, без текста вокруг) со полями:\n`
+      + `action, desiredTone, willingnessToHelp, emotionalExpression, motivation, confidence.\n`
+      + `action ∈ help|reluctant_help|refuse|counter_offer|ask_clarification|emotional_response\n`
+      + `Сообщение пользователя: ${userMessage.slice(0, 400)}\n`
+      + `intent=${intent}. JSON:`,
+    maxOutputTokens: 400,
+    temperature: 0.1,
+    abortSignal: AbortSignal.timeout(Math.min(INNER_MONOLOGUE_TIMEOUT_MS, 45_000)),
+  });
 
-  return {
-    action: parsed.action as LiaDecision['action'],
-    desiredTone: (LIA_TONES.includes(parsed.desiredTone as typeof LIA_TONES[number])
-      ? parsed.desiredTone
-      : 'warm') as LiaDecision['desiredTone'],
-    willingnessToHelp: Math.max(0, Math.min(1, Number(parsed.willingnessToHelp) || 0.5)),
-    emotionalExpression: (LIA_EMOTIONS.includes(parsed.emotionalExpression as typeof LIA_EMOTIONS[number])
-      ? parsed.emotionalExpression
-      : 'neutral') as LiaDecision['emotionalExpression'],
-    motivation: parsed.motivation || '',
-    confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || 0.5)),
-    decidedAt: Date.now(),
-  };
+  decision = toDecision(retry.text);
+  if (decision) return decision;
+
+  throw new Error('Inner monologue did not return JSON');
 }
