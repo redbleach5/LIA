@@ -33,6 +33,7 @@
     "logs:agent:win": "powershell -Command \"Select-String -Path dev.log -Pattern '\\[agent\\]|\\[tools\\]' | Select-Object -Last 100\"",
     "logs:errors:win": "powershell -Command \"Select-String -Path dev.log -Pattern '\\[ERROR\\]' | Select-Object -Last 50\"",
     "kb:backup": "node scripts/kb-backup.mjs",
+    "kb:restore": "node scripts/kb-restore.mjs",
     "kb:e2e": "node scripts/kb-chat-e2e.mjs",
     "kb:export": "node scripts/kb-export.mjs",
     "kb:import": "node scripts/kb-export.mjs import",

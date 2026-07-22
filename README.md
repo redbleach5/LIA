@@ -28,6 +28,8 @@ Windows: `bun install`, Ollama из Start Menu, те же `ollama pull` в Power
 (ГБ VRAM удалённой карты). **С работы без белого IP** — см. корневой
 [`REMOTE-OLLAMA.md`](./REMOTE-OLLAMA.md) (Tailscale, бесплатно для себя).
 
+**Бэкап памяти Лии** (диалоги/настройки — не на GitHub): [`BACKUP.md`](./BACKUP.md).
+
 ### Рекомендации по моделям (2026)
 
 Ориентир железа Лии: stress floor **RTX 3060 12 GB**, комфортнее на **~16 GB+**. Chat и embeddings через Ollama.
@@ -334,6 +336,7 @@ powershell -ExecutionPolicy Bypass -File scripts\diagnose.ps1 -Verbose
 | `bun run setup` | Полная настройка новой машины: .env, ключи, БД, hooks |
 | `bun run setup:hooks` | Установить git pre-commit hook (защита от утечки токенов) |
 | `bun run kb:backup [path]` | Атомарный backup SQLite DB (через Online Backup API) |
+| `bun run kb:restore <file.db>` | Восстановить live DB из backup (см. [`BACKUP.md`](./BACKUP.md)) |
 | `bun run diagnose` | Быстрая диагностика (Ollama, БД, пути) |
 | `bun run diagnose:verbose` | То же с подробным выводом |
 | `bun run test` | Vitest — все тесты |

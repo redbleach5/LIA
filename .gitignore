@@ -24,6 +24,9 @@ db/
 *.db-wal
 *.db-shm
 
+# Local Ollama inventory dumps (may include custom Modelfiles) — keep off GitHub
+ollama-backup-*.json
+
 # Logs
 dev.log
 server.log

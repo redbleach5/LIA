@@ -7,37 +7,24 @@
 //   bun run kb:backup                    # → db/backup-YYYY-MM-DD-HHMMSS.db
 //   bun run kb:backup /tmp/my-backup.db  # → /tmp/my-backup.db
 //
-// Что делает:
-//   1. WAL checkpoint (TRUNCATE) — сливает WAL в основной файл
-//   2. better-sqlite3 db.backup(targetPath) — atomic snapshot через
-//      SQLite Online Backup API. Не блокирует writes, не даёт torn pages.
-//   3. Копирует -wal и -shm файлы рядом (на всякий случай)
-//
-// Почему не `cp db/custom.db`:
-//   - cp может попасть в момент mid-write → torn page → "database disk image is malformed"
-//   - cp не копирует WAL — теряются последние транзакции после checkpoint'а
-//   - better-sqlite3 db.backup() использует SQLite Online Backup API — атомарно
+// См. BACKUP.md в корне репо.
 
 import Database from 'better-sqlite3';
-import { resolveDbPath } from '../src/lib/paths.ts';
-import { copyFile, existsSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
+import { resolveDbPath } from './lib/resolve-db-path.mjs';
 
 const targetArg = process.argv[2];
+const sourceDbPath = resolveDbPath(process.env.DATABASE_URL);
 
-// Determine backup path
 let backupPath;
 if (targetArg) {
   backupPath = path.resolve(targetArg);
 } else {
-  const dbPath = resolveDbPath(process.env.DATABASE_URL);
-  const dbDir = path.dirname(dbPath);
+  const dbDir = path.dirname(sourceDbPath);
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   backupPath = path.join(dbDir, `backup-${ts}.db`);
 }
-
-// Resolve source DB path
-const sourceDbPath = resolveDbPath(process.env.DATABASE_URL);
 
 if (!existsSync(sourceDbPath)) {
   console.error(`❌ Source DB not found: ${sourceDbPath}`);
@@ -45,21 +32,19 @@ if (!existsSync(sourceDbPath)) {
   process.exit(1);
 }
 
+mkdirSync(path.dirname(backupPath), { recursive: true });
+
 console.log(`📦 Backing up SQLite database`);
 console.log(`   Source: ${sourceDbPath}`);
 console.log(`   Target: ${backupPath}`);
 
-// Open source DB (better-sqlite3)
-const db = new Database(sourceDbPath, { readonly: true });
+// Not readonly — wal_checkpoint needs a write connection
+const db = new Database(sourceDbPath);
 
 try {
-  // 1. WAL checkpoint (TRUNCATE) — сливаем WAL в основной файл
-  //    Backup и так атомарный, но checkpoint уменьшает размер backup'а
-  //    (без WAL-записей) и убеждается что все commits на диске.
   console.log('   Checkpointing WAL...');
   db.pragma('wal_checkpoint(TRUNCATE)');
 
-  // 2. Atomic backup through SQLite Online Backup API
   console.log('   Creating atomic snapshot...');
   await db.backup(backupPath);
 
@@ -71,23 +56,18 @@ try {
   db.close();
 }
 
-// 3. Copy -wal and -shm files if they exist (extra safety)
 const walPath = `${sourceDbPath}-wal`;
 const shmPath = `${sourceDbPath}-shm`;
-const backupWalPath = `${backupPath}-wal`;
-const backupShmPath = `${backupPath}-shm`;
-
 if (existsSync(walPath)) {
-  await copyFile(walPath, backupWalPath);
-  console.log(`   Copied WAL: ${backupWalPath}`);
+  copyFileSync(walPath, `${backupPath}-wal`);
+  console.log(`   Copied WAL: ${backupPath}-wal`);
 }
 if (existsSync(shmPath)) {
-  await copyFile(shmPath, backupShmPath);
-  console.log(`   Copied SHM: ${backupShmPath}`);
+  copyFileSync(shmPath, `${backupPath}-shm`);
+  console.log(`   Copied SHM: ${backupPath}-shm`);
 }
 
 console.log('');
-console.log('To restore:');
-console.log(`  1. Stop the server`);
-console.log(`  2. cp ${backupPath} ${sourceDbPath}`);
-console.log(`  3. Restart the server`);
+console.log('To restore (stop Lia first):');
+console.log(`  bun run kb:restore ${backupPath}`);
+console.log('Docs: BACKUP.md');
