@@ -76,6 +76,34 @@ export type AgentPlanLive = {
   complexity: string;
 };
 
+export type ProjectDesignLive = {
+  name: string;
+  kind: string;
+  stack: string[];
+  tree: Array<{ path: string; role: string }>;
+  scripts: Record<string, string | undefined>;
+  preview: { type: string; port?: number; url?: string };
+  entry?: string;
+  acceptance: string;
+  createdBy?: string;
+};
+
+export type RuntimeLogLive = {
+  stream: 'stdout' | 'stderr' | 'system';
+  text: string;
+  ts: number;
+};
+
+export type RuntimeStatusLive = {
+  status: string;
+  port?: number | null;
+  previewUrl?: string | null;
+  pid?: number | null;
+  restartCount?: number;
+  lastError?: string | null;
+  scriptKey?: string | null;
+};
+
 export type ChatMode = 'auto' | 'agent';
 
 /** Agent workspace mode — orthogonal to ChatMode (Диалог | Агент). */

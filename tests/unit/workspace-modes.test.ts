@@ -50,7 +50,15 @@ describe('workspace-modes', () => {
 
   it('edit includes write tools', () => {
     const tools = applyModeWhitelist('edit');
-    expect(tools).toEqual(expect.arrayContaining(['write_file', 'edit_file', 'run_command']));
+    expect(tools).toEqual(expect.arrayContaining([
+      'write_file',
+      'edit_file',
+      'run_command',
+      'propose_design',
+      'runtime_start',
+      'runtime_logs',
+      'runtime_stop',
+    ]));
     expect(tools.length).toBeGreaterThanOrEqual(EDIT_TOOLS.length);
   });
 

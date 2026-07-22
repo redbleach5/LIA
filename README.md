@@ -87,7 +87,8 @@ bun run test -- tests/core   # только контракты ядра
 - **3D VRM-аватар** — blendshapes для эмоций, дыхание, моргание, lip-sync; камера и фон в настройках
 - **Capability tier** — авто-детект железа и размера модели → выбор стратегии (`micro` / `standard` / `plus` / `max`), кэш 1 час
 - **Cognitive depth** — `classifyTaskComplexity` (regex) × `planExecution` (mode × tier × complexity) → адаптивное число LLM-вызовов, deliberate, self-check
-- **20 agent tools** — FS (`read/write/edit_file`, `grep`, `list_*`, `file_search`), **`run_command`**, `code_run`, web (`web_search`, `fetch_page`, `http_request`), `save_artifact`, KB (4), codebase (2), `ask_user` — см. `src/lib/agent/tools.ts`
+- **24+ agent tools** — FS (`read/write/edit_file`, `grep`, `list_*`, `file_search`), **`run_command`**, `code_run`, **Create Runtime** (`propose_design`, `runtime_start`/`logs`/`stop`), web (`web_search`, `fetch_page`, `http_request`), `save_artifact`, KB (4), codebase (2), `ask_user` — см. `src/lib/agent/tools.ts`
+- **Create Runtime** — Design Gate (стек + структура → `lia.project.json`) → scaffold → Process Supervisor (live logs + preview) → Verify/Heal перед ГОТОВО; вкладки Дизайн / Терминал / Preview в Agent Workbench
 - **Тёплый лён UI** — светлая палитра, warm brown accent, Plus Jakarta Sans + JetBrains Mono
 - **Knowledge Base** — hybrid search (vector + BM25 + RRF). Загрузка документов (.md/.txt/.pdf/.docx), папки проекта (docs/code), URL crawler (Readability), file watcher, BM25 inverted index, citations, KB drawer. См. [docs/kb/README.md](./docs/kb/README.md)
 

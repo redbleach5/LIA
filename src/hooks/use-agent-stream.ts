@@ -79,6 +79,9 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
       store.setActiveTaskQuestion(null);
       useChatStore.setState({ activeTaskArtifacts: [] });
       useChatStore.setState({ activeTaskFileChanges: [] });
+      useChatStore.getState().setActiveTaskDesign(null);
+      useChatStore.getState().clearActiveTaskRuntimeLogs();
+      useChatStore.getState().setActiveTaskRuntime(null);
       if (task.status === 'failed' && task.error) {
         store.setActiveTaskError(String(task.error));
       } else {
@@ -279,6 +282,62 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
         canUndo: data.canUndo !== false,
         step: Number(data.step ?? 0),
         ts: Number(data.ts ?? Date.now()),
+      });
+    },
+    design_proposed: (e) => {
+      const data = parseEventData(e);
+      if (!data?.design || typeof data.design !== 'object') return;
+      const d = data.design as Record<string, unknown>;
+      useChatStore.getState().setActiveTaskDesign({
+        name: String(d.name ?? ''),
+        kind: String(d.kind ?? ''),
+        stack: Array.isArray(d.stack) ? d.stack.map(String) : [],
+        tree: Array.isArray(d.tree)
+          ? d.tree.map((t: unknown) => {
+              const row = t as { path?: string; role?: string };
+              return { path: String(row.path ?? ''), role: String(row.role ?? '') };
+            })
+          : [],
+        scripts: (d.scripts && typeof d.scripts === 'object')
+          ? (d.scripts as Record<string, string | undefined>)
+          : {},
+        preview: (d.preview && typeof d.preview === 'object')
+          ? {
+              type: String((d.preview as { type?: string }).type ?? 'none'),
+              port: typeof (d.preview as { port?: number }).port === 'number'
+                ? (d.preview as { port: number }).port
+                : undefined,
+              url: typeof (d.preview as { url?: string }).url === 'string'
+                ? (d.preview as { url: string }).url
+                : undefined,
+            }
+          : { type: 'none' },
+        entry: typeof d.entry === 'string' ? d.entry : undefined,
+        acceptance: String(d.acceptance ?? ''),
+        createdBy: 'lia',
+      });
+    },
+    runtime_log: (e) => {
+      const data = parseEventData(e);
+      if (!data?.text) return;
+      const stream = data.stream === 'stderr' || data.stream === 'system' ? data.stream : 'stdout';
+      useChatStore.getState().addActiveTaskRuntimeLog({
+        stream,
+        text: String(data.text),
+        ts: Number(data.ts ?? Date.now()),
+      });
+    },
+    runtime_status: (e) => {
+      const data = parseEventData(e);
+      if (!data?.status) return;
+      useChatStore.getState().setActiveTaskRuntime({
+        status: String(data.status),
+        port: data.port != null ? Number(data.port) : null,
+        previewUrl: data.previewUrl != null ? String(data.previewUrl) : null,
+        pid: data.pid != null ? Number(data.pid) : null,
+        restartCount: data.restartCount != null ? Number(data.restartCount) : undefined,
+        lastError: data.lastError != null ? String(data.lastError) : null,
+        scriptKey: data.scriptKey != null ? String(data.scriptKey) : null,
       });
     },
   };

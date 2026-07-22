@@ -3,7 +3,15 @@
 // ============================================================================
 
 import type { StateCreator } from 'zustand';
-import type { AgentTask, AgentTaskStatus, AgentStepLive, AgentPlanLive } from './types';
+import type {
+  AgentTask,
+  AgentTaskStatus,
+  AgentStepLive,
+  AgentPlanLive,
+  ProjectDesignLive,
+  RuntimeLogLive,
+  RuntimeStatusLive,
+} from './types';
 import type { EpisodesSlice } from './episodes-slice';
 import type { MessagesSlice } from './messages-slice';
 import type { HealthSlice } from './health-slice';
@@ -29,6 +37,9 @@ export type AgentSlice = {
     ts: number;
     undone?: boolean;
   }>;
+  activeTaskDesign: ProjectDesignLive | null;
+  activeTaskRuntimeLogs: RuntimeLogLive[];
+  activeTaskRuntime: RuntimeStatusLive | null;
 
   setAgentTasks: (t: AgentTask[]) => void;
   addAgentTask: (t: AgentTask) => void;
@@ -55,6 +66,10 @@ export type AgentSlice = {
   markActiveTaskFileChangeUndone: (changeId: string) => void;
   markActiveTaskFileChangesUndone: (changeIds: string[]) => void;
   markAllActiveTaskFileChangesUndone: () => void;
+  setActiveTaskDesign: (d: ProjectDesignLive | null) => void;
+  addActiveTaskRuntimeLog: (line: RuntimeLogLive) => void;
+  setActiveTaskRuntime: (r: RuntimeStatusLive | null) => void;
+  clearActiveTaskRuntimeLogs: () => void;
 
   resetActiveTask: () => void;
 };
@@ -64,6 +79,7 @@ const INITIAL_ACTIVE_TASK: Pick<AgentSlice,
   | 'activeTaskSteps' | 'activeTaskQuestion' | 'activeTaskResult'
   | 'activeTaskError' | 'activeTaskArtifacts'
   | 'activeTaskFileChanges'
+  | 'activeTaskDesign' | 'activeTaskRuntimeLogs' | 'activeTaskRuntime'
 > = {
   activeTaskId: null,
   activeTaskStatus: null,
@@ -74,6 +90,9 @@ const INITIAL_ACTIVE_TASK: Pick<AgentSlice,
   activeTaskError: null,
   activeTaskArtifacts: [],
   activeTaskFileChanges: [],
+  activeTaskDesign: null,
+  activeTaskRuntimeLogs: [],
+  activeTaskRuntime: null,
 };
 
 export const createAgentSlice: StateCreator<
@@ -134,6 +153,12 @@ export const createAgentSlice: StateCreator<
       c.canUndo && !c.undone ? { ...c, undone: true, canUndo: false } : c
     ),
   })),
+  setActiveTaskDesign: (d) => set({ activeTaskDesign: d }),
+  addActiveTaskRuntimeLog: (line) => set((s) => ({
+    activeTaskRuntimeLogs: [...s.activeTaskRuntimeLogs, line].slice(-300),
+  })),
+  setActiveTaskRuntime: (r) => set({ activeTaskRuntime: r }),
+  clearActiveTaskRuntimeLogs: () => set({ activeTaskRuntimeLogs: [] }),
 
   resetActiveTask: () => set({ ...INITIAL_ACTIVE_TASK }),
 });

@@ -54,14 +54,16 @@ export const AGENT_TEMPLATES: Record<AgentTemplateName, AgentTemplate> = {
     label: 'Программист',
     systemPrompt: `Ты — Coding Agent. Твоя задача: написать рабочий, протестированный код.
 
-Стратегия:
-1. Прочитай существующие файлы (если есть) через read_file / list_tree / grep
-2. Напиши или правь код через write_file / edit_file
-3. Проверь в проекте через run_command (bun/npm/pytest/vitest) — не только code_run
-4. Для git: run_command({ command: "git", args: ["status"] }) / diff / add / commit
-5. code_run — только для коротких сниппетов в sandbox, не для test suite проекта
-6. Сохрани финальную версию через save_artifact для пользователя
-7. Ответь "ГОТОВО: <описание что создано + как запустить>"
+Стратегия (Create Runtime):
+1. Для новой игры/сайта/программы: propose_design (стек + дерево + scripts/preview)
+2. Прочитай существующие файлы (если есть) через read_file / list_tree / grep
+3. Напиши или правь код через write_file / edit_file
+4. Запусти артефакт через runtime_start; при ошибке — runtime_logs → правка → runtime_start
+5. Проверь в проекте через run_command (bun/npm/pytest/vitest) — не только code_run
+6. Для git: run_command({ command: "git", args: ["status"] }) / diff / add / commit
+7. code_run — только для коротких сниппетов в sandbox, не для test suite проекта
+8. Сохрани финальную версию через save_artifact для пользователя
+9. Ответь "ГОТОВО: <описание что создано + как открыть preview>" только после успешного runtime_start
 
 ПРАВИЛА:
 - Пиши ПОЛНЫЙ рабочий код, не заглушки и не фрагменты
@@ -71,7 +73,27 @@ export const AGENT_TEMPLATES: Record<AgentTemplateName, AgentTemplate> = {
 - Включай обработки ошибок (try/except, validation)
 - Добавляй комментарии для сложной логики
 - Указывай зависимости (requirements.txt, package.json)`,
-    toolWhitelist: ['write_file', 'edit_file', 'read_file', 'list_dir', 'list_tree', 'file_search', 'grep', 'run_command', 'code_run', 'save_artifact', 'search_codebase', 'list_codebase_symbols', 'search_sources', 'get_source'],
+    toolWhitelist: [
+      'propose_design',
+      'write_file',
+      'edit_file',
+      'read_file',
+      'list_dir',
+      'list_tree',
+      'file_search',
+      'grep',
+      'run_command',
+      'code_run',
+      'runtime_start',
+      'runtime_logs',
+      'runtime_stop',
+      'save_artifact',
+      'search_codebase',
+      'list_codebase_symbols',
+      'search_sources',
+      'get_source',
+      'ask_user',
+    ],
     maxSteps: 15,
     maxDurationSec: 600,
   },

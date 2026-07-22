@@ -58,6 +58,14 @@ import { packKbEvidenceForSynthesis } from './kb-evidence-pack';
 import { isProjectRootFsScope } from './workspace-scope';
 import { formatAgentStepHistory } from './step-history-compact';
 import { GROUNDING } from '@/lib/prompts/grounding';
+import { stepsHaveRuntimeVerify } from './runtime/verify';
+import { designNeedsRuntimeVerify, inferProjectDesign } from './runtime/infer-design';
+
+/** Create / fix living artifacts that need Process Supervisor before ГОТОВО. */
+export function goalRequiresRuntimeVerify(goal: string): boolean {
+  if (!isCodeCreationGoal(goal) && !shouldReuseRecentEpisodeSandbox(goal)) return false;
+  return designNeedsRuntimeVerify(inferProjectDesign(goal));
+}
 
 // ============================================================================
 // Constants (extracted from runner.ts — single source of truth)
@@ -458,16 +466,16 @@ export function describeFsScopeForPrompt(
     if (goal && isCodeCreationGoal(goal)) {
       return [
         `Рабочая директория — пустой write-sandbox: ${fsScope}.`,
-        'Создавай файлы через write_file (пути относительно sandbox, напр. index.html).',
-        'Пустой list_tree в начале — нормально. НЕ выводи весь код в ответ и не пиши ГОТОВО без успешного write_file.',
-        'После записи проверь list_tree / read_file.',
+        'Сначала propose_design (стек + структура), затем write_file (пути относительно sandbox).',
+        'Пустой list_tree в начале — нормально. После записи — runtime_start для verify.',
+        'НЕ пиши ГОТОВО без успешного write_file и runtime_start.',
       ].join(' ');
     }
     if (goal && (isFixOrDebugArtifactGoal(goal) || isReferentialWorkspaceGoal(goal))) {
       return [
         `Рабочая директория — sandbox с файлами недавней задачи: ${fsScope}.`,
         'Сначала list_tree и read_file (index.html / script.js / style.css). Не вызывай list_sources/ask_user «какая игра».',
-        'Баг фиксируй через edit_file / write_file в этом sandbox.',
+        'Баг фиксируй через edit_file / write_file, затем runtime_start.',
       ].join(' ');
     }
     return [
@@ -524,15 +532,21 @@ export function hasAgentCompletionSignal(
 
 /**
  * Create/implement goals must not end on prose «ГОТОВО» without file writes.
+ * Living artifacts also require a successful runtime_start (verify) before ГОТОВО.
  */
 export function shouldAcceptAgentCompletion(opts: {
   goal: string;
   text: string;
   lastObservation?: string;
   stepsIncludingCurrent: Array<{ action: string; observation?: string }>;
+  /** When true (create + preview design), require runtime_start success. */
+  requireRuntimeVerify?: boolean;
 }): boolean {
   if (!hasAgentCompletionSignal(opts.text, opts.lastObservation)) return false;
   if (isCodeCreationGoal(opts.goal) && !stepsHaveCreationArtifacts(opts.stepsIncludingCurrent)) {
+    return false;
+  }
+  if (opts.requireRuntimeVerify && !stepsHaveRuntimeVerify(opts.stepsIncludingCurrent)) {
     return false;
   }
   return true;
@@ -577,9 +591,10 @@ const FALLBACK_PLANS: Record<
   },
   code_create: {
     steps: [
+      'propose_design — стек, дерево файлов, scripts и preview (lia.project.json)',
       'write_file — основной файл(ы) с полным рабочим кодом (не заглушки)',
-      'list_tree / read_file — проверить, что файлы на диске',
-      'При необходимости code_run или краткая проверка; затем ГОТОВО с путями и как открыть',
+      'runtime_start — поднять preview/процесс и дождаться health',
+      'При ошибке: runtime_logs → edit_file → runtime_start (heal); затем ГОТОВО с путями',
     ],
     needsTools: true,
     complexity: 'medium',
@@ -589,7 +604,7 @@ const FALLBACK_PLANS: Record<
       'list_tree — файлы в sandbox этой задачи',
       'read_file основных файлов (index.html / script.js / style.css)',
       'edit_file или write_file — исправить проблему',
-      'ГОТОВО: что было сломано и какие файлы изменены',
+      'runtime_start — проверить, что снова запускается; ГОТОВО',
     ],
     needsTools: true,
     complexity: 'medium',
@@ -712,11 +727,15 @@ export async function generatePlan(
     ? `- Это lookup в базе знаний: планируй только KB-инструменты (list_sources, search_sources, get_source, read_folder_file).`
     : '';
   const createHint = isCodeCreationGoal(task.goal) && !sandboxReuse
-    ? `- Это СОЗДАНИЕ артефакта: в плане обязан быть write_file (или edit_file). Не планируй «сформулировать ответ» без записи файлов.
-- steps — короткие СТРОКИ («write_file: index.html — полный тетрис»). НЕ вставляй JSON tool-call с args и НЕ вставляй тело файла в план.`
+    ? `- Это СОЗДАНИЕ артефакта (Create Runtime):
+  1) propose_design (или уже есть lia.project.json) — стек + структура + scripts/preview
+  2) write_file с полным рабочим кодом
+  3) runtime_start — обязательно проверить запуск; при ошибке runtime_logs → edit_file → runtime_start
+  4) ГОТОВО только после успешного runtime
+- steps — короткие СТРОКИ. НЕ вставляй JSON tool-call с args и НЕ вставляй тело файла в план.`
     : '';
   const fixHint = sandboxReuse && (isFixOrDebugArtifactGoal(task.goal) || isReferentialWorkspaceGoal(task.goal))
-    ? `- Follow-up по артефакту: сначала list_tree/read_file в текущем sandbox, потом правка. Запрещено начинать с list_sources или ask_user.`
+    ? `- Follow-up по артефакту: сначала list_tree/read_file в текущем sandbox, потом правка, затем runtime_start. Запрещено начинать с list_sources или ask_user.`
     : '';
 
   const systemPrompt = `Ты — планировщик задач для агента Лии.
@@ -924,9 +943,10 @@ ${isExploration
     : `- Анализ проекта/кода: list_sources → search_codebase (исходники) и/или search_sources + read_folder_file (документы). Folder KB ≠ .ts исходники.
 - Пустой list_tree / ошибка пути / пустой sandbox — это НЕ конец задачи: смени стратегию (search_codebase / list_sources), не пиши ГОТОВО`
   : isCreation
-    ? `- СОЗДАНИЕ: обязателен write_file (полный рабочий код на диск). Не выкладывай весь код только в текст ответа.
-- Много файлов — несколько write_file. После записи — list_tree/read_file для проверки.
-- ГОТОВО только после успешного write_file/edit_file/save_artifact; иначе продолжай.`
+    ? `- СОЗДАНИЕ (Create Runtime): propose_design → write_file (полный код на диск) → runtime_start.
+- Много файлов — несколько write_file. После записи — runtime_start (не только list_tree).
+- При ошибке запуска: runtime_logs → edit_file → runtime_start (heal, до 2–3 циклов).
+- ГОТОВО только после успешного write_file и runtime_start (status healthy/running).`
     : '- Если нужен код — полный рабочий код; многофайловый проект — отдельные save_artifact; проверка — run_command или code_run'}
 - "ГОТОВО: <резюме>" или "DONE: <summary>" — только отдельной строкой и только если цель реально закрыта
 - ask_user — только при настоящей неоднозначности цели; не спрашивай из‑за пустого sandbox
@@ -1260,6 +1280,10 @@ export async function synthesize(
       ? `Ты — Лия. Задача была создать код/файлы, но в шагах НЕТ успешного write_file / edit_file / save_artifact.
 Честно скажи, что файлы на диск не записаны. Не утверждай «я создал игру/сайт/файл».
 Можно кратко описать, что планировалось, и предложить повторить задачу агентом.
+От первого лица. До 200 слов.`
+    : isCodeCreationGoal(task.goal) && goalRequiresRuntimeVerify(task.goal) && !stepsHaveRuntimeVerify(steps)
+      ? `Ты — Лия. Файлы записаны, но runtime_start не подтвердил запуск (preview/процесс).
+Честно скажи, что артефакт ещё не проверен запуском. Предложи открыть файлы вручную или повторить с runtime.
 От первого лица. До 200 слов.`
     : `Ты — Лия. После цикла исследований и инструментов дай финальный ответ пользователю.
 Опирайся на результаты шагов, цитируй находки, учитывай диалог до задачи.

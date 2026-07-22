@@ -36,6 +36,12 @@ import {
 import { makeSearchCodebaseTool, makeListCodebaseSymbolsTool } from './tools/search-codebase';
 import { makeGrepTool } from './tools/grep';
 import { makeRunCommandTool } from './tools/run-command';
+import {
+  makeProposeDesignTool,
+  makeRuntimeStartTool,
+  makeRuntimeLogsTool,
+  makeRuntimeStopTool,
+} from './runtime/tools';
 
 function makeReadFileTool(task: AgentTask) {
   return tool({
@@ -518,6 +524,10 @@ export function buildAgentTools(
     http_request: makeHttpRequestTool(),
     fetch_page: createFetchPageTool(),
     code_run: makeCodeRunTool(),
+    propose_design: makeProposeDesignTool(task),
+    runtime_start: makeRuntimeStartTool(task),
+    runtime_logs: makeRuntimeLogsTool(task),
+    runtime_stop: makeRuntimeStopTool(task),
     ask_user: makeAskUserTool(task),
     // ── Knowledge Base tools ──
     search_sources: makeSearchSourcesTool({ pinnedSourceIds: opts?.pinnedSourceIds }),

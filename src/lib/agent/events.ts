@@ -23,7 +23,43 @@ export type AgentEvent =
   | { type: 'task_failed'; taskId: string; error: string; chatMessageId?: string; ts: number }
   | { type: 'task_cancelled'; taskId: string; ts: number }
   | { type: 'artifact_saved'; taskId: string; step: number; filename: string; url: string; ts: number }
-  | { type: 'file_changed'; taskId: string; step: number; changeId: string; path: string; tool: 'edit_file' | 'write_file'; diff?: string; canUndo: boolean; ts: number };
+  | { type: 'file_changed'; taskId: string; step: number; changeId: string; path: string; tool: 'edit_file' | 'write_file'; diff?: string; canUndo: boolean; ts: number }
+  | {
+      type: 'design_proposed';
+      taskId: string;
+      design: {
+        name: string;
+        kind: string;
+        stack: string[];
+        tree: Array<{ path: string; role: string }>;
+        scripts: Record<string, string | undefined>;
+        preview: { type: string; port?: number; url?: string };
+        entry?: string;
+        acceptance: string;
+        createdBy: 'lia';
+      };
+      autoAccepted: boolean;
+      ts: number;
+    }
+  | {
+      type: 'runtime_log';
+      taskId: string;
+      stream: 'stdout' | 'stderr' | 'system';
+      text: string;
+      ts: number;
+    }
+  | {
+      type: 'runtime_status';
+      taskId: string;
+      status: string;
+      port?: number | null;
+      previewUrl?: string | null;
+      pid?: number | null;
+      restartCount?: number;
+      lastError?: string | null;
+      scriptKey?: string | null;
+      ts: number;
+    };
 
 function getEmitter(): EventEmitter {
   const g = globalThis as unknown as { [key: string]: unknown };
@@ -63,6 +99,8 @@ globalForBuffer.__liaEventBuffer = eventBuffer;
 const BUFFER_LIMIT = 100;
 
 function bufferEvent(event: AgentEvent) {
+  // runtime_log is high-volume — skip replay buffer (live SSE only).
+  if (event.type === 'runtime_log') return;
   const arr = eventBuffer.get(event.taskId) ?? [];
   arr.push(event);
   if (arr.length > BUFFER_LIMIT) arr.shift();

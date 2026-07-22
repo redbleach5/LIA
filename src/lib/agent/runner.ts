@@ -29,8 +29,9 @@ import { buildAgentTools, describeTools } from './tools';
 import { detectLoop, hasSuccessfulWebMaterial } from './loop-detector';
 import { hasSuccessfulKbMaterial } from './kb-step-utils';
 import { shouldFinalizeKbLookupAfterSteps } from './kb-step-utils';
-import { isCodeCreationGoal } from './kb-step-utils';
+import { isCodeCreationGoal, stepsHaveCreationArtifacts } from './kb-step-utils';
 import { shouldReuseRecentEpisodeSandbox } from './artifact-followup-client';
+import { stepsHaveRuntimeVerify } from './runtime/verify';
 import {
   emitAgentEvent,
   clearBuffer,
@@ -63,6 +64,7 @@ import {
   synthesize,
   isSandboxFsScope,
   shouldAcceptAgentCompletion,
+  goalRequiresRuntimeVerify,
   // Re-exported constants (backwards compat):
   PLANNING_TEMPERATURE,
   EXECUTION_TEMPERATURE,
@@ -364,6 +366,21 @@ export async function runAgentTask(taskId: string): Promise<void> {
         ts: Date.now(),
       });
       steps = [];
+    }
+
+    // ── 1b. DESIGN GATE (create goals) — стек + структура до execute ──
+    if (
+      !task.checkpointJson
+      && isCodeCreationGoal(task.goal)
+      && !shouldReuseRecentEpisodeSandbox(task.goal)
+      && task.fsScope
+    ) {
+      try {
+        const { runDesignGate } = await import('@/lib/agent/runtime/design-gate');
+        await runDesignGate(task);
+      } catch (e) {
+        log.warn('agent', 'design gate failed (non-fatal)', {}, e);
+      }
     }
 
     // ── 2. EXECUTE LOOP ──
@@ -763,25 +780,35 @@ export async function runAgentTask(taskId: string): Promise<void> {
       }
 
       // Check if model decided to finish — ONLY on explicit "ГОТОВО:" signal.
-      // Create goals: reject prose ГОТОВО without write_file / edit_file / save_artifact.
+      // Create goals: reject without writes / runtime verify.
       if (stepResult.finished) {
+        const requireRuntimeVerify = goalRequiresRuntimeVerify(task.goal);
         const accept = shouldAcceptAgentCompletion({
           goal: task.goal,
           text: stepResult.thought,
           lastObservation: stepResult.observation,
           stepsIncludingCurrent: steps,
+          requireRuntimeVerify,
         });
         if (accept) {
           log.info('agent', `Step ${i + 1} — model emitted "ГОТОВО" signal, breaking loop`);
           break;
         }
-        if (isCodeCreationGoal(task.goal)) {
-          log.warn('agent', `Step ${i + 1} — ignoring ГОТОВО (create goal, no file writes yet)`);
+        if (isCodeCreationGoal(task.goal) || requireRuntimeVerify) {
+          log.warn('agent', `Step ${i + 1} — ignoring ГОТОВО (create/runtime gate)`);
           const last = steps[steps.length - 1];
           if (last) {
+            const missingWrites = !stepsHaveCreationArtifacts(steps);
+            const missingRuntime = requireRuntimeVerify && !stepsHaveRuntimeVerify(steps);
+            const hints: string[] = [];
+            if (missingWrites) {
+              hints.push('файлы не записаны — вызови write_file с полным рабочим кодом');
+            }
+            if (missingRuntime) {
+              hints.push('нет успешного runtime_start — запусти preview и дождись healthy');
+            }
             last.observation =
-              `${last.observation}\n\n[СИСТЕМА: ГОТОВО отклонено — файлы не записаны. `
-              + 'Вызови write_file с полным рабочим кодом, затем проверь list_tree.]';
+              `${last.observation}\n\n[СИСТЕМА: ГОТОВО отклонено — ${hints.join('; ') || 'условия не выполнены'}.]`;
           }
         }
       }
@@ -877,6 +904,13 @@ export async function cancelAgentTaskRun(taskId: string): Promise<void> {
   signalCancellation(taskId);
   cancelWaiting(taskId);
   abortTask(taskId);
+
+  try {
+    const { stopRuntime } = await import('@/lib/agent/runtime/process-supervisor');
+    await stopRuntime(taskId);
+  } catch {
+    /* non-fatal */
+  }
 
   await new Promise(r => setTimeout(r, 200));
 

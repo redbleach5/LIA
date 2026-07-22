@@ -44,6 +44,10 @@ export const EDIT_TOOLS = [
   'code_run',
   'save_artifact',
   'http_request',
+  'propose_design',
+  'runtime_start',
+  'runtime_logs',
+  'runtime_stop',
 ] as const;
 
 export const WORKSPACE_MODE_TOOLS: Record<WorkspaceMode, readonly string[]> = {
