@@ -88,6 +88,8 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     ".zscripts/**",
     "scripts/**",
     "prisma/migrations/**",
+    // Agent sandboxes / local artifacts (gitignored, but present on developer machines)
+    "download/**",
   ],
 }];
 

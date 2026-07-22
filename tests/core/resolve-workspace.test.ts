@@ -22,12 +22,19 @@ vi.mock('@/lib/db', () => ({
   },
 }));
 
-const findRecentEpisodeFsScope = vi.fn(async () => null);
+const findRecentEpisodeFsScope = vi.fn(
+  async (_episodeId: string): Promise<{
+    fsScope: string;
+    taskId: string;
+    goal: string;
+    files: string[];
+  } | null> => null,
+);
 vi.mock('@/lib/agent/artifact-followup', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/agent/artifact-followup')>();
   return {
     ...actual,
-    findRecentEpisodeFsScope: (...args: unknown[]) => findRecentEpisodeFsScope(...args),
+    findRecentEpisodeFsScope: (episodeId: string) => findRecentEpisodeFsScope(episodeId),
   };
 });
 
