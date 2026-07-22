@@ -23,9 +23,10 @@ Windows: `bun install`, Ollama из Start Menu, те же `ollama pull` в Power
 (пока в настройках ещё ничего не сохраняли).
 
 **Удалённый Ollama (ноутбук + ПК с GPU):** в **Настройки → Модель → Хост Ollama**
-укажи IP компьютера с видеокартой (например `192.168.1.50`). На том ПК запусти
-`OLLAMA_HOST=0.0.0.0 ollama serve` и при необходимости задай в `.env` ноутбука
-`LIA_INFERENCE_VRAM_GB` (ГБ VRAM удалённой карты).
+укажи IP компьютера с видеокартой (LAN `192.168…` или Tailscale `100.x…`).
+На том ПК: `OLLAMA_HOST=0.0.0.0 ollama serve`, на ноуте — `LIA_INFERENCE_VRAM_GB`
+(ГБ VRAM удалённой карты). **С работы без белого IP** — см. корневой
+[`REMOTE-OLLAMA.md`](./REMOTE-OLLAMA.md) (Tailscale, бесплатно для себя).
 
 ### Рекомендации по моделям (2026)
 
