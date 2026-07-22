@@ -71,12 +71,13 @@ describe('inner monologue P2 compact standard', () => {
 });
 
 describe('P2 deliberate/monologue cost guards', () => {
-  it('default learning intent on standard does not enable monologue alone', () => {
+  it('general chat intent on standard does not enable monologue alone', () => {
+    // Default is no longer forced «learning» — mid chat → complex, warm fallback path.
     const msg = 'Нужен совет по архитектуре микросервисов на выходных';
-    expect(classifyIntent(msg)).toBe('learning');
+    expect(classifyIntent(msg)).toBe('complex');
     expect(shouldRunInnerMonologue({
       tier: 'standard',
-      intent: 'learning',
+      intent: classifyIntent(msg),
       isTrivialGreeting: false,
       isTrivialHowAreYou: false,
       isAgent: false,

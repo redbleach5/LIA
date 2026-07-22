@@ -285,7 +285,12 @@ describe('Phase 6 — cognitive glue runtime (deliberate + self-check wiring)', 
 
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
     // Must NOT throw — deliberate failure is non-fatal.
-    const result = await runChatPipeline({ text: 'Сложный вопрос требующий анализа', episodeId, mode: 'auto' });
+    // Use complex stem so plus tier still enables deliberate (not social/simple).
+    const result = await runChatPipeline({
+      text: 'Проанализируй архитектуру микросервисов подробно',
+      episodeId,
+      mode: 'auto',
+    });
 
     // Pipeline must NOT crash — it returns a stream (not a NextResponse error).
     const { NextResponse } = await import('next/server');
@@ -312,9 +317,12 @@ describe('Phase 6 — cognitive glue runtime (deliberate + self-check wiring)', 
     });
 
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
-    // Use a text that classifies as 'moderate' or higher — plus tier only
-    // enables selfCheck for moderate+ (calls>=2, selfCheck=true).
-    await runChatPipeline({ text: 'Сложный вопрос требующий анализа', episodeId, mode: 'auto' });
+    // Use complex stem — plus tier enables selfCheck for complex/research (calls>=2).
+    await runChatPipeline({
+      text: 'Проанализируй архитектуру микросервисов подробно',
+      episodeId,
+      mode: 'auto',
+    });
 
     // Wait for onFinish (triggers persistChatTurn → runSelfCheck).
     await onFinishRef.current;
@@ -337,8 +345,12 @@ describe('Phase 6 — cognitive glue runtime (deliberate + self-check wiring)', 
     runSelfCheckMock.mockResolvedValueOnce({ issues: [], severity: 'ok' });
 
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
-    // Use a text that classifies as 'moderate' or higher for plus tier.
-    const result = await runChatPipeline({ text: 'Сложный вопрос требующий анализа', episodeId, mode: 'auto' });
+    // Complex stem → plus tier selfCheck path.
+    const result = await runChatPipeline({
+      text: 'Проанализируй архитектуру микросервисов подробно',
+      episodeId,
+      mode: 'auto',
+    });
     if (!('response' in result)) throw new Error('Expected chat pipeline result');
     const body = await readResponseBody(result.response);
     expect(body.length).toBeGreaterThan(0);
