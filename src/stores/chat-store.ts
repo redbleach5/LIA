@@ -12,8 +12,8 @@
 //
 // Middleware:
 //   - devtools: Redux DevTools интеграция (видеть все state changes в браузере)
-//   - persist: mode сохраняется в localStorage (пользователь не теряет
-//     выбранный режим чата при перезагрузке)
+//   - persist: mode, workspace mode, current episode + active agent task
+//     (чтобы F5 / новая вкладка поднимали чат и Create Runtime studio)
 //
 // Все типы (ChatMessage, Episode, AgentTask, и т.д.) вынесены в slices/types.ts
 // чтобы избежать циклических зависимостей между slices.
@@ -63,9 +63,14 @@ export const useChatStore = create<ChatStore>()(
         partialize: (state) => ({
           mode: state.mode,
           agentWorkspaceMode: state.agentWorkspaceMode,
-        }) as Pick<ChatStore, 'mode' | 'agentWorkspaceMode'>,
+          currentEpisodeId: state.currentEpisodeId,
+          activeTaskId: state.activeTaskId,
+        }) as Pick<ChatStore, 'mode' | 'agentWorkspaceMode' | 'currentEpisodeId' | 'activeTaskId'>,
         merge: (persisted, current) => {
-          const saved = persisted as Partial<Pick<ChatStore, 'mode' | 'agentWorkspaceMode'>> | undefined;
+          const saved = persisted as Partial<Pick<
+            ChatStore,
+            'mode' | 'agentWorkspaceMode' | 'currentEpisodeId' | 'activeTaskId'
+          >> | undefined;
           const rawMode = saved?.mode ?? current.mode;
           const rawWs = saved?.agentWorkspaceMode ?? current.agentWorkspaceMode;
           const ws =
@@ -77,6 +82,12 @@ export const useChatStore = create<ChatStore>()(
             ...saved,
             mode: normalizeChatMode(String(rawMode)),
             agentWorkspaceMode: ws,
+            currentEpisodeId: typeof saved?.currentEpisodeId === 'string'
+              ? saved.currentEpisodeId
+              : current.currentEpisodeId,
+            activeTaskId: typeof saved?.activeTaskId === 'string'
+              ? saved.activeTaskId
+              : current.activeTaskId,
           };
         },
       },

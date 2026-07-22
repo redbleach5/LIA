@@ -130,6 +130,11 @@ async function probePort(port: number, timeoutMs: number): Promise<boolean> {
   return false;
 }
 
+/** One-shot TCP probe for hydrate (external serve may still be up). */
+export async function probeLocalPort(port: number, timeoutMs = 600): Promise<boolean> {
+  return probePort(port, timeoutMs);
+}
+
 async function waitHealthy(session: Session): Promise<boolean> {
   if (!session.port) {
     // No port — treat as healthy if process still alive after short settle

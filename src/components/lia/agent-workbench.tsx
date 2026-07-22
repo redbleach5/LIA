@@ -426,11 +426,19 @@ function PreviewTab({
     );
   }
 
+  const canShowFrame = Boolean(url) && (
+    healthy
+    || runtime?.status === 'starting'
+    || runtime?.status === 'idle'
+    || runtime?.status === 'unhealthy'
+  );
+
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 px-1 flex-wrap">
         <span className="text-[10px] font-mono text-text-dim truncate max-w-[14rem]">
           {url ?? 'нет URL'}
+          {runtime?.status ? ` · ${runtime.status}` : ''}
         </span>
         <div className="flex-1" />
         {url && (
@@ -463,17 +471,21 @@ function PreviewTab({
           Рестарт
         </button>
       </div>
-      {!healthy || !url ? (
+      {!url ? (
         <EmptyHint>
           Preview появится после успешного runtime_start (status: healthy).
         </EmptyHint>
-      ) : (
+      ) : canShowFrame ? (
         <iframe
           title="Lia artifact preview"
           src={url}
           className="w-full h-[min(36vh,18rem)] rounded-lg border border-border/70 bg-white"
           sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
         />
+      ) : (
+        <EmptyHint>
+          Процесс остановлен — нажми «Рестарт», чтобы снова поднять preview.
+        </EmptyHint>
       )}
     </div>
   );

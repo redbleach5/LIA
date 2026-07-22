@@ -124,7 +124,13 @@ export function useEpisodes() {
   }, [addEpisode]);
 
   const select = useCallback(async (id: string) => {
-    if (currentEpisodeIdRef.current === id) return;
+    // After F5, persisted currentEpisodeId matches but messages are empty — still load.
+    if (
+      currentEpisodeIdRef.current === id
+      && useChatStore.getState().messages.length > 0
+    ) {
+      return;
+    }
 
     // Abort in-flight chat stream so reply text/emotion from A cannot land on B.
     abortActiveChatStream();
@@ -224,6 +230,13 @@ export function useEpisodes() {
 
         if (episodes.length > 0 && !useChatStore.getState().currentEpisodeId) {
           await select(episodes[0].id);
+        } else if (episodes.length > 0) {
+          const savedId = useChatStore.getState().currentEpisodeId;
+          if (savedId && episodes.some(e => e.id === savedId)) {
+            await select(savedId);
+          } else {
+            await select(episodes[0].id);
+          }
         }
       } catch (e) {
         console.error('[useEpisodes] init failed:', e);

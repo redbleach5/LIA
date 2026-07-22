@@ -8,6 +8,7 @@ import {
   getRuntimeSnapshot,
   startRuntimeFromDesign,
   stopRuntime,
+  probeLocalPort,
 } from '@/lib/agent/runtime/process-supervisor';
 import { parseProjectDesignJson, PROJECT_MANIFEST_FILENAME } from '@/lib/agent/runtime/project-manifest';
 import { readFile } from 'fs/promises';
@@ -29,9 +30,44 @@ export async function GET(
   const task = await getAgentTask(id);
   if (!task) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
+  let design = null;
+  if (task.fsScope) {
+    try {
+      const text = await readFile(join(task.fsScope, PROJECT_MANIFEST_FILENAME), 'utf8');
+      const parsed = parseProjectDesignJson(text);
+      if (parsed.ok) design = parsed.design;
+    } catch {
+      /* no manifest yet */
+    }
+  }
+
+  let snapshot = getRuntimeSnapshot(id);
+  const port = snapshot?.port ?? design?.preview?.port ?? null;
+  // After F5/HMR the in-memory session may be gone while serve still listens.
+  if (port && (!snapshot || snapshot.status === 'idle' || snapshot.status === 'stopped')) {
+    const up = await probeLocalPort(port);
+    if (up) {
+      snapshot = {
+        taskId: id,
+        status: 'healthy',
+        port,
+        previewUrl: design ? `http://127.0.0.1:${port}` : (snapshot?.previewUrl ?? `http://127.0.0.1:${port}`),
+        pid: snapshot?.pid ?? null,
+        restartCount: snapshot?.restartCount ?? 0,
+        lastError: null,
+        startedAt: snapshot?.startedAt ?? null,
+        scriptKey: snapshot?.scriptKey,
+        command: snapshot?.command,
+        args: snapshot?.args,
+        cwd: snapshot?.cwd,
+      };
+    }
+  }
+
   return NextResponse.json({
-    snapshot: getRuntimeSnapshot(id),
+    snapshot,
     logs: getRuntimeLogs(id, 120),
+    design,
   });
 }
 

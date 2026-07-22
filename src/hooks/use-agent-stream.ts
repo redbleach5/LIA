@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { useChatStore, type AgentTask } from '@/stores/chat-store';
 import type { AgentPlanLive, AgentStepLive } from '@/stores/slices/types';
 import { mergeAgentSteps } from '@/lib/agent/step-merge';
+import { hydrateCreateRuntimeStudio } from '@/lib/agent/runtime/hydrate-client';
 
 type StreamCtx = {
   activeTaskId: string;
@@ -79,9 +80,7 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
       store.setActiveTaskQuestion(null);
       useChatStore.setState({ activeTaskArtifacts: [] });
       useChatStore.setState({ activeTaskFileChanges: [] });
-      useChatStore.getState().setActiveTaskDesign(null);
-      useChatStore.getState().clearActiveTaskRuntimeLogs();
-      useChatStore.getState().setActiveTaskRuntime(null);
+      // Keep design/runtime until hydrate refreshes them (F5 / reconnect).
       if (task.status === 'failed' && task.error) {
         store.setActiveTaskError(String(task.error));
       } else {
@@ -98,6 +97,8 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
           fsScope: task.fsScope != null ? String(task.fsScope) : null,
           ...(typeof task.episodeId === 'string' ? { episodeId: task.episodeId } : {}),
         });
+        // Restore design / logs / preview after F5 or new tab (SSE buffer may miss them).
+        void hydrateCreateRuntimeStudio(task.id);
       }
     },
     task_planning: () => {
@@ -476,6 +477,9 @@ export function useAgentStream() {
     const es = new EventSource(`/api/agent/${activeTaskId}/stream`);
     eventSourceRef.current = es;
 
+    // Immediate hydrate (don't wait for task_init) — covers done tasks + live preview.
+    void hydrateCreateRuntimeStudio(activeTaskId);
+
     const handlers = createSseHandlers(ctx);
     for (const [type, handler] of Object.entries(handlers)) {
       es.addEventListener(type, (e: Event) => {
@@ -512,7 +516,28 @@ export function useAgentStream() {
         const res = await fetch(url);
         if (!res.ok) return;
         const data = await res.json();
-        useChatStore.getState().setAgentTasks((data.tasks ?? []) as AgentTask[]);
+        const tasks = (data.tasks ?? []) as AgentTask[];
+        useChatStore.getState().setAgentTasks(tasks);
+
+        const store = useChatStore.getState();
+        const activeId = store.activeTaskId;
+        if (activeId) {
+          const stillThere = tasks.some(t => t.id === activeId);
+          if (!stillThere) {
+            // Persisted task belongs to another episode or was deleted.
+            store.resetActiveTask();
+          } else {
+            void hydrateCreateRuntimeStudio(activeId);
+          }
+        } else {
+          // After F5 with no persisted active: prefer in-flight task, else latest with sandbox.
+          const running = tasks.find(t =>
+            t.status === 'executing' || t.status === 'planning' || t.status === 'waiting_input' || t.status === 'synthesizing',
+          );
+          const withScope = tasks.find(t => Boolean(t.fsScope));
+          const pick = running ?? withScope ?? null;
+          if (pick) store.setActiveTask(pick.id);
+        }
       } catch (e) {
         console.error('[useAgentStream] refresh failed:', e);
       }
