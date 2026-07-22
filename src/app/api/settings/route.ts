@@ -1,0 +1,145 @@
+// GET  /api/settings — get Ollama settings + available models + avatar config
+// POST /api/settings — update Ollama settings + avatar config
+
+import { NextRequest, NextResponse } from 'next/server';
+import { getOllamaSettings, setOllamaSettings, checkOllamaHealth, reloadSettings } from '@/lib/ollama';
+import { getUserDisplayName, setUserDisplayName } from '@/lib/memory/user-profile';
+import { db } from '@/lib/db';
+import { PATHS } from '@/lib/paths';
+import { existsSync, readdirSync } from 'fs';
+import { DEFAULT_AVATAR_CONFIG, parseAvatarConfig, type AvatarConfig } from '@/lib/avatar-config';
+import { logger } from '@/lib/logger';
+import { parseBody, updateSettingsSchema } from '@/lib/infra/api-validation';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+export async function GET() {
+  const settings = await getOllamaSettings();
+  const health = await checkOllamaHealth();
+
+  // List available VRM models
+  const vrmFiles: string[] = [];
+  try {
+    if (existsSync(PATHS.publicModels)) {
+      vrmFiles.push(...readdirSync(PATHS.publicModels)
+        .filter(f => f.toLowerCase().endsWith('.vrm'))
+        .map(f => `/models/${f}`));
+    }
+  } catch { /* ignore */ }
+
+  // Read active VRM from DB
+  let activeVrm: string | null = null;
+  try {
+    const row = await db.setting.findUnique({ where: { key: 'avatar_vrm_path' } });
+    activeVrm = row?.value ?? null;
+  } catch { /* ignore */ }
+
+  // Avatar customization config (camera, background, animation, body)
+  let avatarConfig: AvatarConfig = { ...DEFAULT_AVATAR_CONFIG };
+  try {
+    const row = await db.setting.findUnique({ where: { key: 'avatar_config' } });
+    if (row?.value) {
+      avatarConfig = parseAvatarConfig(row.value);
+    }
+  } catch { /* ignore */ }
+
+  const userDisplayName = await getUserDisplayName();
+
+  return NextResponse.json({
+    ...settings,
+    ollamaOk: health.ok,
+    ollamaError: health.error,
+    availableModels: health.models ?? [],
+    availableEmbedModels: (health.models ?? []).filter(m =>
+      m.startsWith('nomic-embed') ||
+      m.startsWith('mxbai-embed') ||
+      m.startsWith('bge-m3') ||
+      m.startsWith('snowflake-arctic-embed') ||
+      m.startsWith('bge-') ||
+      m.startsWith('e5-')
+    ),
+    vrmFiles,
+    activeVrm,
+    avatarConfig,
+    userDisplayName,
+  });
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const parsed = await parseBody(req, updateSettingsSchema);
+    if (!parsed.success) return parsed.response;
+    const body = parsed.data;
+
+    const ollamaChanged = body.baseUrl !== undefined || body.model !== undefined
+      || body.embedModel !== undefined || body.agentModel !== undefined;
+
+    // Single write — avoids partial in-memory state if a later field throw mid-loop.
+    if (ollamaChanged) {
+      await setOllamaSettings({
+        baseUrl: body.baseUrl,
+        model: body.model,
+        agentModel: body.agentModel,
+        embedModel: body.embedModel,
+      });
+    }
+
+    // Active VRM
+    if (body.activeVrm !== undefined && body.activeVrm !== null) {
+      await db.setting.upsert({
+        where: { key: 'avatar_vrm_path' },
+        create: { key: 'avatar_vrm_path', value: body.activeVrm },
+        update: { value: body.activeVrm },
+      });
+    }
+
+    // Avatar customization config — full JSON blob
+    if (body.avatarConfig) {
+      const merged = parseAvatarConfig(JSON.stringify({
+        ...DEFAULT_AVATAR_CONFIG,
+        ...body.avatarConfig,
+      }));
+      await db.setting.upsert({
+        where: { key: 'avatar_config' },
+        create: { key: 'avatar_config', value: JSON.stringify(merged) },
+        update: { value: JSON.stringify(merged) },
+      });
+    }
+
+    if (body.userDisplayName !== undefined) {
+      await setUserDisplayName(body.userDisplayName ?? '');
+    }
+
+    // Если Ollama-настройки менялись — перечитываем и инвалидируем кэш.
+    if (ollamaChanged) {
+      await reloadSettings();
+      // P1: model roles changed → refresh capability / VRAM budget profile
+      const { refreshCapabilityAfterModelChange } = await import('@/lib/capability-profile');
+      await refreshCapabilityAfterModelChange();
+    }
+
+    // Возвращаем обновлённые настройки + свежий health.
+    const settings = await getOllamaSettings();
+    const health = await checkOllamaHealth();
+    const userDisplayName = await getUserDisplayName();
+    return NextResponse.json({
+      ...settings,
+      ollamaOk: health.ok,
+      ollamaError: health.error,
+      availableModels: health.models ?? [],
+      availableEmbedModels: (health.models ?? []).filter(m =>
+        m.startsWith('nomic-embed') ||
+        m.startsWith('mxbai-embed') ||
+        m.startsWith('bge-m3') ||
+        m.startsWith('snowflake-arctic-embed') ||
+        m.startsWith('bge-') ||
+        m.startsWith('e5-')
+      ),
+      userDisplayName,
+    });
+  } catch (e) {
+    logger.error('api', 'POST failed', {}, e);
+    return NextResponse.json({ error: 'failed' }, { status: 500 });
+  }
+}

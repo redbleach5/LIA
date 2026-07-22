@@ -1,0 +1,330 @@
+import 'server-only';
+
+// ============================================================================
+// InnerMonologue — Лия решает сама как ответить.
+// ============================================================================
+//
+// Это КЛЮЧЕВОЙ компонент. Вместо regex assessDisagreement + emotion injection,
+// Лия делает LLM call где САМА решает:
+//   - помогать или нет
+//   - какой тон она хочет
+//   - насколько она хочет помочь
+//   - какую эмоцию выразить
+//
+// Решение приходит как structured JSON, inject'ится в system prompt как ФАКТ
+// (не как команда): «Ты решила: помочь неохотно, тон прямой, желание 40%».
+// LLM в основном ответе исходит из ЭТОГО решения, не из «отвечай тепло».
+//
+// Tiered approach:
+//   - plus/max: full inner monologue (LLM)
+//   - standard: full monologue for companion-critical intents (emotional/urgent
+//     + strong affective perceive triggers); otherwise fallback tree (latency)
+//   - micro: fallback decision tree only
+//
+// Latency: +1-3s when monologue runs; 0 on fallback path.
+//
+// Routing policy: shouldRunInnerMonologue() — when to pay for the LLM call.
+// Do NOT hardcode warmth into the system prompt; same decideHowToRespond path.
+
+import { generateText } from 'ai';
+import { getChatModel } from '@/lib/ollama';
+import { logger } from '@/lib/logger';
+import type { EmotionVector } from '@/lib/personality';
+import { buildInnerMonologuePrompt } from '@/lib/prompts/inner-monologue-prompt';
+import { createEmotionalStateSnapshot, type EmotionalStateSnapshot } from './emotional-state';
+import { createFallbackDecision, LIA_ACTIONS, LIA_EMOTIONS, LIA_TONES, type LiaDecision } from './decision';
+
+// ============================================================================
+// Intent classification — упрощённый, без regex
+// ============================================================================
+
+export type LiaIntent = 'trivial' | 'learning' | 'instruction' | 'emotional' | 'urgent' | 'complex';
+
+/**
+ * Классифицировать intent сообщения.
+ *
+ * НЕ regex pattern matching (как violationPatterns) — а keyword heuristic +
+ * structure. Это определяет ТИП запроса, не character decision.
+ *
+ * Intent передаётся в inner monologue как контекст. Лия решает как реагировать.
+ */
+/**
+ * JS `\b` is ASCII-only ([A-Za-z0-9_]) — it does not treat Cyrillic as word
+ * chars, so `\bгрустно\b` never matches. Use Unicode letter/number edges.
+ */
+const TOKEN_START = '(?:^|[^\\p{L}\\p{N}_])';
+const TOKEN_END = '(?![\\p{L}\\p{N}_])';
+
+export function classifyIntent(message: string): LiaIntent {
+  const lower = message.toLowerCase().trim();
+  const length = message.length;
+
+  // Urgent — маркеры срочности (stems ok: срочн*)
+  if (new RegExp(
+    `${TOKEN_START}(?:срочн\\p{L}*|быстрее|немедленно|сейчас же|помогите|спасай|горит)${TOKEN_END}`,
+    'iu',
+  ).test(lower)) {
+    return 'urgent';
+  }
+
+  // Emotional / relational — чувства, поддержка, «просто поговорить»
+  // Stems (поддерж*, скуча*, …) intentionally open-ended; «рад» is whole-token.
+  if (new RegExp(
+    `${TOKEN_START}(?:грустно|плохо|тоскливо|одиноко|страшно|боюсь|злюсь|бесит|устал\\p{L}*|надоело|счастлив\\p{L}*|рад${TOKEN_END}|люблю|тяжело|тревожн\\p{L}*|плач\\p{L}*|скуча\\p{L}*|обними|поддерж\\p{L}*|поговор\\p{L}*|поболта\\p{L}*|как ты себя|мне не|расстроен\\p{L}*|обидел\\p{L}*|обид\\p{L}*|волнуюсь|пережива\\p{L}*)`,
+    'iu',
+  ).test(lower)) {
+    return 'emotional';
+  }
+
+  // Learning — вопросы «как работает», «почему»
+  // Trivial («как дела») проверяем РАНЬШЕ: иначе ^как ловит smalltalk как learning.
+  if (length < 30 && new RegExp(
+    `${TOKEN_START}(?:что делаешь|как дела|привет|hi|hello|здравствуй)${TOKEN_END}`,
+    'iu',
+  ).test(lower)) {
+    return 'trivial';
+  }
+
+  if (new RegExp(
+    `^(?:как|почему|что такое|объясни|расскажи|помоги понять|в чём разница)${TOKEN_END}`,
+    'iu',
+  ).test(lower)) {
+    return 'learning';
+  }
+
+  // Instruction — «сделай», «напиши», «создай»
+  if (new RegExp(
+    `^(?:сделай|напиши|создай|добавь|удали|измени|поставь|настрой|запусти|установи)${TOKEN_END}`,
+    'iu',
+  ).test(lower)) {
+    return 'instruction';
+  }
+
+  // Complex — длинный message или содержит код/trace
+  if (length > 200 || /\b(function|class|error|trace|stack|exception|debug)\b/i.test(lower)) {
+    return 'complex';
+  }
+
+  return 'learning';  // default — treat as learning question
+}
+
+// ============================================================================
+// Inner monologue — main function
+// ============================================================================
+
+/** Local Ollama 7B often needs >15s (cold load / VRAM pressure). Override via env. */
+const INNER_MONOLOGUE_TIMEOUT_MS = (() => {
+  const raw = parseInt(process.env.LIA_INNER_MONOLOGUE_TIMEOUT_MS || '60000', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 60_000;
+})();
+
+/** Perceive triggers that warrant full monologue on standard (affective, not task). */
+const STANDARD_MONOLOGUE_TRIGGERS = new Set([
+  'sadTopic',
+  'rudeness',
+  'disagreement',
+  'warmth',
+]);
+
+/**
+ * Should Lia pay for a full inner-monologue LLM call?
+ *
+ * Pure routing — does not invent tone/prompts. Same decideHowToRespond path
+ * when true; createFallbackDecision when false.
+ *
+ * Policy (P1b / PRIORITIES):
+ *   - micro: never (budget)
+ *   - trivial greeting / how-are-you short-circuit: never
+ *   - agent mode: never (task path)
+ *   - plus/max: always
+ *   - standard: companion-critical only (emotional/urgent intent OR strong
+ *     affective perceive triggers) — keep latency low on instruction/learning
+ */
+export function shouldRunInnerMonologue(params: {
+  tier: string;
+  intent: LiaIntent;
+  isTrivialGreeting: boolean;
+  isTrivialHowAreYou: boolean;
+  isAgent?: boolean;
+  /** From perceive() — optional affective cues */
+  emotionTriggers?: readonly string[];
+  /** Getting to know user / name unknown */
+  isAcquaintanceRequest?: boolean;
+}): boolean {
+  const {
+    tier,
+    intent,
+    isTrivialGreeting,
+    isTrivialHowAreYou,
+    isAgent = false,
+    emotionTriggers = [],
+    isAcquaintanceRequest = false,
+  } = params;
+
+  if (isTrivialGreeting || isTrivialHowAreYou) return false;
+  if (isAgent) return false;
+  if (tier === 'micro') return false;
+  if (isAcquaintanceRequest) return true;
+  if (tier === 'plus' || tier === 'max') return true;
+
+  if (tier === 'standard') {
+    if (intent === 'emotional' || intent === 'urgent') return true;
+    return emotionTriggers.some(t => STANDARD_MONOLOGUE_TRIGGERS.has(t));
+  }
+
+  // Unknown tier — prefer full path (do not silently dumb down)
+  return true;
+}
+
+/**
+ * Лия решает как ответить на сообщение.
+ *
+ * Callers should use shouldRunInnerMonologue() to decide whether to invoke this
+ * or createFallbackDecision. Inside: micro still forces fallback; standard+
+ * runs the LLM monologue when reached.
+ *
+ * @returns LiaDecision — что Лия решила
+ */
+export async function decideHowToRespond(params: {
+  userMessage: string;
+  emotion: EmotionVector;
+  recentTurns: Array<{ role: string; content: string }>;
+  tier: string;
+  isKbQuestion: boolean;
+  isAgent: boolean;
+}): Promise<{ decision: LiaDecision; emotionalState: EmotionalStateSnapshot; intent: LiaIntent }> {
+  const { userMessage, emotion, recentTurns, tier, isKbQuestion, isAgent } = params;
+
+  // Snapshot emotional state
+  const emotionalState = createEmotionalStateSnapshot(emotion);
+
+  // Classify intent
+  const intent = classifyIntent(userMessage);
+
+  // micro — no inner monologue LLM call (tiny models)
+  if (tier === 'micro') {
+    const decision = createFallbackDecision({
+      emotionalState: {
+        dominantEmotion: emotionalState.dominantEmotion,
+        intensityLabel: emotionalState.intensityLabel,
+      },
+      intent,
+      isKbQuestion,
+      isAgent,
+    });
+    logger.debug('chat', 'Lia decision (8B fallback)', {
+      action: decision.action,
+      tone: decision.desiredTone,
+      willingness: decision.willingnessToHelp,
+      intent,
+      motivation: decision.motivation,
+    });
+    return { decision, emotionalState, intent };
+  }
+
+  // standard / plus / max — full inner monologue (when caller routed here)
+  try {
+    const decision = await innerMonologueLlmCall({
+      userMessage,
+      emotionalState,
+      recentTurns,
+      intent,
+      isKbQuestion,
+      isAgent,
+      tier,
+    });
+
+    logger.debug('chat', 'Lia decision (inner monologue)', {
+      action: decision.action,
+      tone: decision.desiredTone,
+      willingness: decision.willingnessToHelp,
+      emotion: decision.emotionalExpression,
+      intent,
+      motivation: decision.motivation,
+      confidence: decision.confidence,
+    });
+
+    return { decision, emotionalState, intent };
+  } catch (e) {
+    // Inner monologue failed — fallback
+    logger.warn('chat', 'Inner monologue failed, using fallback', {}, e);
+    const decision = createFallbackDecision({
+      emotionalState: {
+        dominantEmotion: emotionalState.dominantEmotion,
+        intensityLabel: emotionalState.intensityLabel,
+      },
+      intent,
+      isKbQuestion,
+      isAgent,
+    });
+    return { decision, emotionalState, intent };
+  }
+}
+
+/**
+ * LLM call для inner monologue.
+ */
+async function innerMonologueLlmCall(params: {
+  userMessage: string;
+  emotionalState: EmotionalStateSnapshot;
+  recentTurns: Array<{ role: string; content: string }>;
+  intent: LiaIntent;
+  isKbQuestion: boolean;
+  isAgent: boolean;
+  tier: string;
+}): Promise<LiaDecision> {
+  const { userMessage, emotionalState, recentTurns, intent, isKbQuestion, isAgent, tier } = params;
+
+  const model = await getChatModel();
+  const prompt = buildInnerMonologuePrompt({
+    userMessage,
+    emotionalState,
+    recentTurns,
+    intent,
+    isKbQuestion,
+    isAgent,
+    tier,
+  });
+
+  const { estimateTokens } = await import('@/lib/chat/context-budget');
+  logger.debug('chat', 'Inner monologue prompt', {
+    tier,
+    chars: prompt.length,
+    estTokens: estimateTokens(prompt),
+  });
+
+  const result = await generateText({
+    model,
+    prompt,
+    maxOutputTokens: 300,
+    temperature: 0.6,  // немного креативности для естественного решения
+    abortSignal: AbortSignal.timeout(INNER_MONOLOGUE_TIMEOUT_MS),
+  });
+
+  // P-CORE-27 fix: use shared `extractJson` (brace-balanced, string-aware)
+  // instead of greedy `\{[\s\S]*\}` regex that failed on trailing prose.
+  const { extractJson } = await import('@/lib/infra/prompt-safety');
+  const parsed = extractJson<Omit<LiaDecision, 'decidedAt'>>(result.text);
+  if (!parsed) {
+    throw new Error('Inner monologue did not return JSON');
+  }
+
+  // Validate + clamp — keys from decision.ts label maps (single source of truth)
+  if (!LIA_ACTIONS.includes(parsed.action as typeof LIA_ACTIONS[number])) {
+    throw new Error(`Invalid action: ${parsed.action}`);
+  }
+
+  return {
+    action: parsed.action as LiaDecision['action'],
+    desiredTone: (LIA_TONES.includes(parsed.desiredTone as typeof LIA_TONES[number])
+      ? parsed.desiredTone
+      : 'warm') as LiaDecision['desiredTone'],
+    willingnessToHelp: Math.max(0, Math.min(1, Number(parsed.willingnessToHelp) || 0.5)),
+    emotionalExpression: (LIA_EMOTIONS.includes(parsed.emotionalExpression as typeof LIA_EMOTIONS[number])
+      ? parsed.emotionalExpression
+      : 'neutral') as LiaDecision['emotionalExpression'],
+    motivation: parsed.motivation || '',
+    confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || 0.5)),
+    decidedAt: Date.now(),
+  };
+}
