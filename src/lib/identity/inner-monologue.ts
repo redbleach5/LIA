@@ -227,6 +227,7 @@ export async function decideHowToRespond(params: {
       intent,
       isKbQuestion,
       isAgent,
+      userMessage,
     });
     logger.debug('chat', 'Lia decision (8B fallback)', {
       action: decision.action,
@@ -272,6 +273,7 @@ export async function decideHowToRespond(params: {
       intent,
       isKbQuestion,
       isAgent,
+      userMessage,
     });
     return { decision, emotionalState, intent };
   }
@@ -293,7 +295,29 @@ async function innerMonologueLlmCall(params: {
 }): Promise<LiaDecision> {
   const { userMessage, emotionalState, recentTurns, intent, isKbQuestion, isAgent, tier } = params;
 
-  const model = await getChatModel();
+  // Prefer secondary (small) model for JSON monologue when configured & pulled —
+  // keeps primary free for voice. Falls back to primary.
+  let monologueModelName: string | undefined;
+  try {
+    const { getSecondaryModelName } = await import('@/lib/chat/model-selection');
+    const { checkOllamaHealth } = await import('@/lib/ollama');
+    const secondary = await getSecondaryModelName();
+    if (secondary) {
+      const health = await checkOllamaHealth({ timeoutMs: 3_000 });
+      if (health.ok && health.models.includes(secondary)) {
+        monologueModelName = secondary;
+      }
+    }
+  } catch {
+    // ignore — use primary
+  }
+
+  const model = await getChatModel(monologueModelName);
+  logger.debug('chat', 'Inner monologue model', {
+    model: monologueModelName ?? 'primary',
+    usedSecondary: !!monologueModelName,
+  });
+
   const prompt = buildInnerMonologuePrompt({
     userMessage,
     emotionalState,

@@ -233,3 +233,45 @@ describe('regression: prior prompt structure preserved', () => {
     expect(full).toBeGreaterThan(base + 500);
   });
 });
+
+describe('liaDecision inject: motivation + presence', () => {
+  it('includes truncated motivation as внутренняя опора', () => {
+    const prompt = buildSystemPrompt(makeCtx({
+      liaDecision: {
+        ...BASE_DECISION,
+        motivation: 'Хочу ответить коротко и по-человечески, без инструктажа',
+      },
+    }));
+    expect(prompt).toContain('Внутренняя опора:');
+    expect(prompt).toContain('по-человечески');
+    expect(prompt).toContain('Как это звучит:');
+  });
+
+  it('emotional_response uses presence hint and soft length', () => {
+    const prompt = buildSystemPrompt(makeCtx({
+      liaDecision: {
+        ...BASE_DECISION,
+        action: 'emotional_response',
+        desiredTone: 'concerned',
+        willingnessToHelp: 0.9,
+        emotionalExpression: 'concern',
+        motivation: 'Рядом важнее советов',
+      },
+    }));
+    expect(prompt).toContain('без режима «разберём задачу по пунктам»');
+    expect(prompt).toContain('живой ответ рядом');
+  });
+
+  it('playful help avoids service-mode length essay', () => {
+    const prompt = buildSystemPrompt(makeCtx({
+      liaDecision: {
+        ...BASE_DECISION,
+        action: 'help',
+        desiredTone: 'playful',
+        willingnessToHelp: 0.9,
+        emotionalExpression: 'playfulness',
+      },
+    }));
+    expect(prompt).toContain('не превращай ответ в инструктаж');
+  });
+});

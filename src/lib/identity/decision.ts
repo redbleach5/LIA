@@ -4,12 +4,12 @@ import 'server-only';
 // LiaDecision — решение Лии как ответить.
 // ============================================================================
 //
-// Это результат inner monologue. Лия САМА решает:
+  // Это результат inner monologue. Лия САМА решает:
 //   - action: что делать (помочь / отказать / уточнить)
 //   - desiredTone: какой тон она хочет (не команда, а её желание)
 //   - willingnessToHelp: насколько она хочет помочь (0..1)
 //   - emotionalExpression: какую эмоцию она хочет выразить
-//   - motivation: почему (для логирования и RL, не inject'ится в ответ)
+//   - motivation: почему (кратко inject в system prompt + логирование / RL)
 //
 // Это НЕ замена RL. RL обучает соответствие между state и willingness/tone.
 // Inner monologue — это realtime decision, RL — обученная политика.
@@ -75,11 +75,11 @@ export interface LiaDecision {
   // Какую эмоцию Лия хочет выразить в ответе
   emotionalExpression: LiaEmotionalExpression;
 
-  // Внутренняя мотивация — почему Лия решила так
-  // НЕ inject'ится в основной ответ, используется для:
-  //   - логирования (debug endpoint)
+  // Внутренняя мотивация — почему Лия решила так.
+  // Кратко inject'ится в system prompt как «внутренняя опора»; также:
+  //   - логирование (debug endpoint)
   //   - RL reward (alignment signal)
-  //   - audit trail (почему Лия так ответила)
+  //   - audit trail
   motivation: string;
 
   // Confidence в решении (0..1) — если низкая, можно fallback на упрощённую логику
@@ -92,17 +92,19 @@ export interface LiaDecision {
 /**
  * Fallback решение для 8B tier или когда inner monologue недоступен.
  *
- * НЕ regex — а упрощённая decision tree на основе emotional state + intent.
- * Это компромисс для слабого железа: Лия менее nuanced, но всё равно решает
- * сама на основе контекста, не по violationPatterns.
+ * Упрощённая decision tree: emotional state + intent + лёгкие cues в тексте.
+ * Не violationPatterns — только чтобы не схлопываться в help/curious.
  */
 export function createFallbackDecision(params: {
   emotionalState: { dominantEmotion: string; intensityLabel: string };
   intent: 'trivial' | 'learning' | 'instruction' | 'emotional' | 'urgent' | 'complex';
   isKbQuestion: boolean;
   isAgent: boolean;
+  /** Optional raw user text for light social cues (jokes, about-you, fatigue). */
+  userMessage?: string;
 }): LiaDecision {
   const { emotionalState, intent, isKbQuestion, isAgent } = params;
+  const msg = (params.userMessage ?? '').toLowerCase();
 
   // Agent mode — всегда help, business tone, neutral emotion
   if (isAgent) {
@@ -138,6 +140,52 @@ export function createFallbackDecision(params: {
       willingnessToHelp: 0.9,
       emotionalExpression: emotionalState.dominantEmotion === 'sadness' ? 'concern' : 'neutral',
       motivation: 'Срочный запрос — помогаю несмотря на состояние',
+      confidence: 0.7,
+      decidedAt: Date.now(),
+    };
+  }
+
+  // Light cues (before generic trivial/learning) — keep Lia varied when monologue fails
+  if (msg && /шутк|анекдот|пошути|рассмеши/.test(msg)) {
+    return {
+      action: 'help',
+      desiredTone: 'playful',
+      willingnessToHelp: 0.55,
+      emotionalExpression: 'playfulness',
+      motivation: 'Просят шутку — отвечаю легко, без инструктажа',
+      confidence: 0.65,
+      decidedAt: Date.now(),
+    };
+  }
+  if (msg && /(про тебя|о тебе|о себе|про себя|расскажи.*(о|про)\s*себ)/.test(msg)) {
+    return {
+      action: 'emotional_response',
+      desiredTone: 'warm',
+      willingnessToHelp: 0.6,
+      emotionalExpression: 'warmth',
+      motivation: 'Спрашивают обо мне — говорю о себе, не увожу в опрос собеседника',
+      confidence: 0.6,
+      decidedAt: Date.now(),
+    };
+  }
+  if (msg && /устал|устала|😭|тяжело сейчас|ничего не помн/.test(msg)) {
+    return {
+      action: 'emotional_response',
+      desiredTone: 'concerned',
+      willingnessToHelp: 0.55,
+      emotionalExpression: 'concern',
+      motivation: 'Человек устал — присутствие важнее советов',
+      confidence: 0.6,
+      decidedAt: Date.now(),
+    };
+  }
+  if (msg && /спасибо|благодарю|thanks/.test(msg)) {
+    return {
+      action: 'help',
+      desiredTone: 'warm',
+      willingnessToHelp: 0.45,
+      emotionalExpression: 'warmth',
+      motivation: 'Благодарность — коротко и тепло, без эссе',
       confidence: 0.7,
       decidedAt: Date.now(),
     };
@@ -183,8 +231,6 @@ export function createFallbackDecision(params: {
   }
 
   // Emotional conversation → she answers as herself; reciprocity is not required.
-  // Fallback only opens the emotional path — tone/words still come from character
-  // when monologue runs; here we must not imply mandatory comfort or love.
   if (intent === 'emotional') {
     return {
       action: 'emotional_response',

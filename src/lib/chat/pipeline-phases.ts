@@ -202,6 +202,7 @@ export async function resolveLiaDecision(params: {
       intent: liaIntent,
       isKbQuestion: isKbQuestion(text),
       isAgent: userMode === 'agent',
+      userMessage: text,
     });
     log.debug('chat', 'Lia decision (skipped monologue)', {
       action: liaDecision.action,

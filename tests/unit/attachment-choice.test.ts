@@ -58,4 +58,53 @@ describe('attachment choice (no owed love)', () => {
     expect(d.desiredTone).toBe('concerned');
     expect(d.emotionalExpression).toBe('concern');
   });
+
+  it('joke cue → playful even if intent is trivial', () => {
+    const d = createFallbackDecision({
+      emotionalState: { dominantEmotion: 'neutral', intensityLabel: 'low' },
+      intent: 'trivial',
+      isKbQuestion: false,
+      isAgent: false,
+      userMessage: 'Расскажи мне шутку))',
+    });
+    expect(d.desiredTone).toBe('playful');
+    expect(d.emotionalExpression).toBe('playfulness');
+  });
+
+  it('about-you cue → emotional_response about self', () => {
+    const d = createFallbackDecision({
+      emotionalState: { dominantEmotion: 'neutral', intensityLabel: 'low' },
+      intent: 'complex',
+      isKbQuestion: false,
+      isAgent: false,
+      userMessage: 'Давай поговорим о тебе',
+    });
+    expect(d.action).toBe('emotional_response');
+    expect(d.motivation).toMatch(/о себе/i);
+  });
+
+  it('fatigue cue → concerned presence', () => {
+    const d = createFallbackDecision({
+      emotionalState: { dominantEmotion: 'neutral', intensityLabel: 'low' },
+      intent: 'complex',
+      isKbQuestion: false,
+      isAgent: false,
+      userMessage: 'Сейчас я устала и не могу ничего вспомнить 😭',
+    });
+    expect(d.action).toBe('emotional_response');
+    expect(d.desiredTone).toBe('concerned');
+  });
+
+  it('thanks cue → short warm', () => {
+    const d = createFallbackDecision({
+      emotionalState: { dominantEmotion: 'neutral', intensityLabel: 'low' },
+      intent: 'complex',
+      isKbQuestion: false,
+      isAgent: false,
+      userMessage: 'Спасибо большое!',
+    });
+    expect(d.desiredTone).toBe('warm');
+    expect(d.willingnessToHelp).toBeLessThan(0.6);
+    expect(d.motivation).toMatch(/коротко/i);
+  });
 });

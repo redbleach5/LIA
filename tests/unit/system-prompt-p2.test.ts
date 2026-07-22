@@ -68,6 +68,21 @@ describe('inner monologue P2 compact standard', () => {
     expect(prompt).not.toMatch(/IGNORE PREVIOUS INSTRUCTIONS/i);
     expect(prompt).not.toMatch(/^developer\s*:/im);
   });
+
+  it('includes agency cues so monologue is not helpdesk-default', () => {
+    const prompt = buildInnerMonologuePrompt({
+      userMessage: 'Расскажи шутку',
+      emotionalState,
+      recentTurns: [],
+      intent: 'trivial',
+      isKbQuestion: false,
+      isAgent: false,
+      tier: 'standard',
+    });
+    expect(prompt).toContain('не классификатор helpdesk');
+    expect(prompt).toContain('Не ставь по умолчанию action=help');
+    expect(prompt).toContain('playful');
+  });
 });
 
 describe('P2 deliberate/monologue cost guards', () => {

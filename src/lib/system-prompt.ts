@@ -120,7 +120,16 @@ function resolveTierInstructions(
 function willingnessToLengthHint(
   willingness: number,
   isTrivial: boolean,
+  action?: LiaDecision['action'],
 ): string {
+  // Presence-first actions: don't push into essay / storyboard mode.
+  if (action === 'emotional_response') {
+    if (willingness < 0.4) return 'коротко, с присутствием (1–3 предложения)';
+    return 'живой ответ рядом с человеком — без лекции и без длинного плана';
+  }
+  if (action === 'ask_clarification') {
+    return 'кратко: одно уточнение, без разжёвывания';
+  }
   if (isTrivial) {
     return 'очень кратко (1–2 предложения), без самопрезентации и списков';
   }
@@ -128,6 +137,40 @@ function willingnessToLengthHint(
   if (willingness < 0.6) return 'нормально, с пояснениями';
   if (willingness < 0.85) return 'по делу, без лишней воды';
   return 'развёрнуто, с примерами — но в рамках ПРАВИЛ ОТВЕТА';
+}
+
+/** How this decision feels in the reply — presence, not bans. */
+export function actionToPresenceHint(
+  action: LiaDecision['action'],
+  tone: LiaDecision['desiredTone'],
+): string {
+  switch (action) {
+    case 'emotional_response':
+      return 'Будь рядом как человек: тепло и честно, без режима «разберём задачу по пунктам».';
+    case 'ask_clarification':
+      return 'Одно ясное уточнение; не устраивай опрос.';
+    case 'reluctant_help':
+      return 'Помоги, но со своим скепсисом или оговоркой — без фальшивой бодрости.';
+    case 'refuse':
+      return 'Откажи прямо и бережно, предложи реальную альтернативу если есть.';
+    case 'counter_offer':
+      return 'Предложи свой вариант вместо слепого согласия.';
+    case 'help':
+    default:
+      if (tone === 'playful') {
+        return 'Можно с юмором и лёгкостью — не превращай ответ в инструктаж.';
+      }
+      if (tone === 'curious') {
+        return 'Интерес уместен; максимум один живой вопрос, если он нужен.';
+      }
+      return 'Отвечай по сути из своего характера — не «сервисный режим».';
+  }
+}
+
+function truncateMotivation(raw: string, maxChars = 180): string {
+  const t = raw.replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  return t.length > maxChars ? `${t.slice(0, maxChars - 1)}…` : t;
 }
 
 type PlaybookFlags = {
@@ -356,13 +399,17 @@ export function buildSystemPromptFootprint(ctx: SystemPromptContext): SystemProm
 
   if (ctx.liaDecision) {
     const d = ctx.liaDecision;
-    const willingnessDesc = willingnessToLengthHint(d.willingnessToHelp, isTrivial);
+    const willingnessDesc = willingnessToLengthHint(d.willingnessToHelp, isTrivial, d.action);
+    const presence = actionToPresenceHint(d.action, d.desiredTone);
+    const why = truncateMotivation(d.motivation);
 
     volatileParts.push(`\nТы решила как ответить:
 - Действие: ${LIA_ACTION_LABELS[d.action] ?? d.action}
 - Тон: ${LIA_TONE_LABELS[d.desiredTone] ?? d.desiredTone}
 - Желание помочь: ${(d.willingnessToHelp * 100).toFixed(0)}% — отвечай ${willingnessDesc}
 - Эмоциональная окраска: ${LIA_EMOTION_LABELS[d.emotionalExpression] ?? d.emotionalExpression}
+${why ? `- Внутренняя опора: ${why}` : ''}
+- Как это звучит: ${presence}
 
 Это твоё решение, исходящее из твоего характера и состояния. Ответь естественно, исходя из него. Не «играй» этот тон — будь им.`);
   } else {
