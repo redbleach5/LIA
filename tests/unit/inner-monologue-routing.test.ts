@@ -41,7 +41,7 @@ describe('classifyIntent (companion cues)', () => {
   });
 });
 
-describe('shouldRunInnerMonologue (P1b routing)', () => {
+describe('shouldRunInnerMonologue (latency pass — always off)', () => {
   const base = {
     isTrivialGreeting: false,
     isTrivialHowAreYou: false,
@@ -49,72 +49,27 @@ describe('shouldRunInnerMonologue (P1b routing)', () => {
     emotionTriggers: [] as string[],
   };
 
-  it('never on micro', () => {
+  it('never runs — micro', () => {
     expect(shouldRunInnerMonologue({
       ...base, tier: 'micro', intent: 'emotional',
     })).toBe(false);
   });
 
-  it('never on trivial greeting / how-are-you', () => {
+  it('never runs — plus/max emotional', () => {
     expect(shouldRunInnerMonologue({
-      ...base, tier: 'standard', intent: 'emotional', isTrivialGreeting: true,
+      ...base, tier: 'plus', intent: 'emotional',
     })).toBe(false);
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'plus', intent: 'learning', isTrivialHowAreYou: true,
-    })).toBe(false);
-  });
-
-  it('never on trivial intent even on plus', () => {
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'plus', intent: 'trivial',
-    })).toBe(false);
-  });
-
-  it('never in agent mode', () => {
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'plus', intent: 'emotional', isAgent: true,
-    })).toBe(false);
-  });
-
-  it('always on plus/max (non-trivial)', () => {
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'plus', intent: 'learning',
-    })).toBe(true);
     expect(shouldRunInnerMonologue({
       ...base, tier: 'max', intent: 'instruction',
-    })).toBe(true);
-  });
-
-  it('on standard: emotional and urgent intents', () => {
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'standard', intent: 'emotional',
-    })).toBe(true);
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'standard', intent: 'urgent',
-    })).toBe(true);
-  });
-
-  it('on standard: skip instruction/learning without affective triggers', () => {
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'standard', intent: 'instruction',
-    })).toBe(false);
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'standard', intent: 'learning',
     })).toBe(false);
   });
 
-  it('on standard: affective perceive triggers enable monologue', () => {
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'standard', intent: 'learning', emotionTriggers: ['sadTopic'],
-    })).toBe(true);
-    expect(shouldRunInnerMonologue({
-      ...base, tier: 'standard', intent: 'learning', emotionTriggers: ['warmth'],
-    })).toBe(true);
-  });
-
-  it('on standard: acquaintance request enables monologue', () => {
+  it('never runs — acquaintance / affective triggers', () => {
     expect(shouldRunInnerMonologue({
       ...base, tier: 'standard', intent: 'learning', isAcquaintanceRequest: true,
-    })).toBe(true);
+    })).toBe(false);
+    expect(shouldRunInnerMonologue({
+      ...base, tier: 'standard', intent: 'learning', emotionTriggers: ['sadTopic'],
+    })).toBe(false);
   });
 });

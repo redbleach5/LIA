@@ -1,14 +1,12 @@
 import 'server-only';
 
 // ============================================================================
-// Self-check step — проверка ответа на ошибки ПОСЛЕ его генерации.
+// Self-check — optional post-hoc quality log (NOT wired into streaming chat).
 // ============================================================================
 //
-// Внимание: в стриминг-режиме ответ уже отправлен пользователю к моменту
-// self-check. Поэтому self-check работает в режиме "quality log" —
-// если найдены проблемы, они логируются и могут быть использованы для
-// RL reward (негативный сигнал). Полная ревизия ответа возможна только
-// в не-стриминг режиме (future work).
+// Streaming already delivered the answer to the user, so a follow-up LLM call
+// cannot revise it. Keep this helper for a future non-streaming revise path;
+// do not re-enable from persistChatTurn without a rewrite path.
 
 import { streamText } from 'ai';
 import { getChatModel } from '@/lib/ollama';

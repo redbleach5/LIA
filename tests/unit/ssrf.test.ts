@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isPrivateIp } from '@/lib/infra/ssrf';
+import { isPrivateIp, assertAllowedPort, assertAllowedMethod } from '@/lib/infra/ssrf';
 
 /**
  * P4-1: SSRF unit tests — covers IPv4, IPv6, IPv4-mapped IPv6 edge cases.
@@ -123,5 +123,19 @@ describe('SSRF: isPrivateIp', () => {
       expect(isPrivateIp('::ffff:8.8.8.8')).toBe(false);
       expect(isPrivateIp('0:0:0:0:0:ffff:0808:0808')).toBe(false);
     });
+  });
+});
+
+describe('SSRF: port / method limits (P4)', () => {
+  it('allows 80/443 and blocks odd ports', () => {
+    expect(() => assertAllowedPort(new URL('https://example.com/'))).not.toThrow();
+    expect(() => assertAllowedPort(new URL('http://example.com:8080/'))).toThrow(/blocked port/);
+    expect(() => assertAllowedPort(new URL('http://example.com:22/'))).toThrow(/blocked port/);
+  });
+
+  it('allows GET/HEAD only by default', () => {
+    expect(() => assertAllowedMethod('GET')).not.toThrow();
+    expect(() => assertAllowedMethod('HEAD')).not.toThrow();
+    expect(() => assertAllowedMethod('POST')).toThrow(/blocked method/);
   });
 });

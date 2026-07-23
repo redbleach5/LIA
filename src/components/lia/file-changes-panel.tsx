@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { FilePenLine, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react';
 import { useChatStore } from '@/stores/chat-store';
 import { cn } from '@/lib/utils';
+import { LIA_APP_EVENTS, dispatchLiaAppEvent } from '@/lib/lia-app-events';
 
 export function FileChangesPanel({
   taskId,
@@ -97,7 +98,7 @@ export function FileChangesPanel({
             title="Откатить все правки (с последней)"
           >
             <RotateCcw className={cn('w-3 h-3', busyId === '__all__' && 'animate-spin')} />
-            Undo all
+            Откатить все
           </button>
         )}
       </div>
@@ -129,9 +130,7 @@ export function FileChangesPanel({
                   className="font-mono truncate flex-1 text-left hover:text-accent hover:underline"
                   title={`${c.path} — открыть в дереве workspace`}
                   onClick={() => {
-                    window.dispatchEvent(new CustomEvent('lia-open-workspace-file', {
-                      detail: { path: c.path },
-                    }));
+                    dispatchLiaAppEvent(LIA_APP_EVENTS.openWorkspaceFile, { path: c.path });
                   }}
                 >
                   {c.path}
@@ -149,7 +148,7 @@ export function FileChangesPanel({
                     title="Откатить эту правку"
                   >
                     <RotateCcw className={cn('w-3 h-3', busyId === c.changeId && 'animate-spin')} />
-                    Undo
+                    Отменить
                   </button>
                 )}
               </div>

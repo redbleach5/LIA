@@ -4,7 +4,7 @@ import 'server-only';
 // + fetch_page — чтение содержимого веб-страницы с извлечением текста.
 
 import { logger } from '@/lib/logger';
-import { assertSafeUrl, assertSafeHost } from '@/lib/infra/ssrf';
+import { assertSafeUrl, assertSafeHost, assertAllowedMethod } from '@/lib/infra/ssrf';
 
 type SearchResult = {
   title: string;
@@ -79,6 +79,7 @@ export async function fetchPage(url: string, maxChars = 5000): Promise<{
   try {
     // SSRF check — проверяем исходный URL перед первым запросом
     await assertSafeUrl(url);
+    assertAllowedMethod('GET');
 
     // Manual redirect following — перепроверяем каждый redirect target
     let currentUrl = url;

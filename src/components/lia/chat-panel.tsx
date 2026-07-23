@@ -9,6 +9,8 @@ import { loadOlderEpisodeMessages } from '@/hooks/use-episodes';
 import { ChatMessage } from '@/components/lia/chat-message';
 import { ChatInput } from '@/components/lia/chat-input';
 import { AgentWorkbench } from '@/components/lia/agent-workbench';
+import { AgentStickyBar } from '@/components/lia/agent-sticky-bar';
+import { AgentWaitingPrompt } from '@/components/lia/agent-waiting-prompt';
 import { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import { EmptyState } from '@/components/lia/empty-state';
 import { WorkspaceBadge } from '@/components/lia/workspace-badge';
@@ -25,13 +27,10 @@ const CompanionPortrait = dynamic(
 
 export function ChatPanel({
   companionBeside = false,
-  showAgentDock = false,
   onCycleAvatar,
 }: {
   /** Show circular companion face beside Lia's latest reply. */
   companionBeside?: boolean;
-  /** Agent chrome in chat column when full avatar stage is unmounted. */
-  showAgentDock?: boolean;
   onCycleAvatar?: () => void;
 }) {
   const messages = useChatStore(s => s.messages);
@@ -184,16 +183,6 @@ export function ChatPanel({
                 <span>Лия отвечает…</span>
               </span>
             )}
-            {!isStreaming && agentBusy && (
-              <span
-                className="inline-flex items-center gap-1.5 text-[10px] text-accent shrink-0"
-                role="status"
-                aria-live="polite"
-              >
-                <span className="w-1 h-1 rounded-full bg-accent animate-pulse" />
-                <span>Агент · Esc — стоп</span>
-              </span>
-            )}
           </div>
         </div>
       </div>
@@ -230,8 +219,12 @@ export function ChatPanel({
                 }
 
                 return (
-                  <div key={m.id} className="flex items-end gap-2.5">
-                    <CompanionPortrait size="md" onCycleMode={onCycleAvatar} className="mb-5" />
+                  <div key={m.id} className="flex items-end gap-2.5 max-sm:flex-col max-sm:items-stretch">
+                    <CompanionPortrait
+                      size="md"
+                      onCycleMode={onCycleAvatar}
+                      className="mb-5 max-sm:self-start max-sm:mb-0 shrink-0"
+                    />
                     <div className="min-w-0 flex-1">
                       <ChatMessage message={m} episodeId={episodeId} />
                     </div>
@@ -256,7 +249,11 @@ export function ChatPanel({
         )}
       </div>
 
-      <AgentWorkbench includeLiveChrome={showAgentDock} />
+      <AgentWorkbench />
+
+      <AgentStickyBar />
+      {/* Reconnect fallback when ask/permission parts not yet in bubble */}
+      <AgentWaitingPrompt />
 
       <ChatInput
         onSend={(text, mode) => sendMessage(text, mode)}

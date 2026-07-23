@@ -1,14 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyHeadroomToCognitiveParams,
-  applyHeadroomToContextWindow,
   bytesPerParamFromQuant,
   classifyTierFromBudget,
   classifyVramPressure,
   estimateModelVramGb,
   resolveComputeBudget,
 } from '@/lib/compute-budget';
-import type { CognitiveParams } from '@/lib/capability-profile';
 
 describe('bytesPerParamFromQuant', () => {
   it('maps common Ollama quants', () => {
@@ -203,43 +200,10 @@ describe('classifyVramPressure — unknown pool', () => {
   });
 });
 
-describe('applyHeadroomToContextWindow', () => {
-  it('never shrinks context under pressure', () => {
-    expect(applyHeadroomToContextWindow(32768, 'comfortable')).toBe(32768);
-    expect(applyHeadroomToContextWindow(32768, 'tight')).toBe(32768);
-    expect(applyHeadroomToContextWindow(32768, 'critical')).toBe(32768);
-  });
-
-  it('preserves 0 unknown', () => {
-    expect(applyHeadroomToContextWindow(0, 'critical')).toBe(0);
-  });
-});
-
-describe('applyHeadroomToCognitiveParams', () => {
-  const base: CognitiveParams = {
-    calls: 2,
-    deliberate: false,
-    selfCheck: true,
-    maxTokens: 4096,
-    toolsEnabled: true,
-    autoWebSearch: true,
-    agentMaxSteps: 25,
-    agentMaxDurationSec: 3600,
-  };
-
-  it('comfortable returns a copy without changes', () => {
-    const out = applyHeadroomToCognitiveParams(base, 'comfortable');
-    expect(out).not.toBe(base);
-    expect(out.maxTokens).toBe(4096);
-    expect(out.agentMaxSteps).toBe(25);
-  });
-
-  it('critical does not cut budgets', () => {
-    const out = applyHeadroomToCognitiveParams(base, 'critical');
-    expect(out.maxTokens).toBe(4096);
-    expect(out.agentMaxSteps).toBe(25);
-    expect(out.agentMaxDurationSec).toBe(3600);
-    expect(out.toolsEnabled).toBe(true);
-    expect(out.calls).toBe(2);
+describe('VRAM pressure policy', () => {
+  it('classifies pressure for UI observe/warn (budgets never cut in capability-profile)', () => {
+    expect(classifyVramPressure({
+      vramPoolGb: 24, headroomGb: 2, headroomRatio: 0.08, vramPoolKnown: true,
+    })).toBe('critical');
   });
 });

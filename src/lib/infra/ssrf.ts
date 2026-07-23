@@ -121,6 +121,36 @@ export async function assertSafeUrl(url: string): Promise<URL> {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
     throw new Error(`blocked protocol: ${u.protocol}`);
   }
+  assertAllowedPort(u);
   await assertSafeHost(u.hostname);
   return u;
+}
+
+/** Default allowlist: 80/443 (+ optional extras). Empty port = scheme default. */
+const DEFAULT_ALLOWED_PORTS = new Set([80, 443]);
+
+export function assertAllowedPort(
+  u: URL,
+  allowedPorts: ReadonlySet<number> = DEFAULT_ALLOWED_PORTS,
+): void {
+  let port = u.port ? parseInt(u.port, 10) : (u.protocol === 'https:' ? 443 : 80);
+  if (!Number.isFinite(port)) {
+    throw new Error(`blocked port: invalid`);
+  }
+  if (!allowedPorts.has(port)) {
+    throw new Error(`blocked port: ${port} (allowed: ${[...allowedPorts].join(', ')})`);
+  }
+}
+
+/** Methods allowed for agent/network fetch by default. */
+const DEFAULT_ALLOWED_METHODS = new Set(['GET', 'HEAD']);
+
+export function assertAllowedMethod(
+  method: string,
+  allowed: ReadonlySet<string> = DEFAULT_ALLOWED_METHODS,
+): void {
+  const m = method.toUpperCase();
+  if (!allowed.has(m)) {
+    throw new Error(`blocked method: ${m} (allowed: ${[...allowed].join(', ')})`);
+  }
 }

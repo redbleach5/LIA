@@ -26,20 +26,22 @@ export function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps) {
     { keys: `${mod}+\\`, label: 'Показать / скрыть чаты' },
     { keys: `${mod}+B`, label: 'База знаний' },
     { keys: `${mod}+,`, label: 'Настройки' },
-    { keys: `${mod}+Shift+A`, label: 'Цикл образа Лии' },
+    { keys: `${mod}+Shift+A`, label: 'В режиме Агент — ask/auto Apply; иначе — цикл образа' },
     { keys: 'Esc', label: 'Стоп ответа или агента' },
     { keys: 'Enter', label: 'Отправить сообщение' },
     { keys: 'Shift+Enter', label: 'Новая строка' },
+    { keys: '@', label: 'В режиме Агент — выбор файла/папки' },
     { keys: '?', label: 'Эта справка' },
   ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Горячие клавиши</DialogTitle>
           <DialogDescription>
-            Режим агента — в селекторе чата. Ход, правки и файлы появляются над полем ввода, когда Лия работает. Тема — в «Ещё».
+            Режим агента — в селекторе чата. «Применить все» — в полоске над правками в ленте.
+            Тема — в «Ещё».
           </DialogDescription>
         </DialogHeader>
         <ul className="mt-2 space-y-1.5">

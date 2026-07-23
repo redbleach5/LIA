@@ -61,9 +61,9 @@ describe('buildChatContext', () => {
     expect(ctx.episodeFacts).toHaveLength(1);
   });
 
-  it('skipRecall=false loads vector and emotional recall', async () => {
+  it('skipRecall=false loads vector recall; emotional recall stays empty', async () => {
     const { buildChatContext } = await import('@/lib/chat/pipeline-helpers');
-    await buildChatContext({
+    const ctx = await buildChatContext({
       episodeId: 'ep-1',
       text: 'Explain architecture',
       skipRecall: false,
@@ -71,7 +71,8 @@ describe('buildChatContext', () => {
     });
 
     expect(recallMock).toHaveBeenCalledOnce();
-    expect(embedRecallMock).toHaveBeenCalledOnce();
+    expect(embedRecallMock).not.toHaveBeenCalled();
+    expect(ctx.emotionalRecall).toEqual({ anchors: [], painfulAnchor: null });
   });
 });
 

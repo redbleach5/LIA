@@ -43,6 +43,7 @@ export function useAgent() {
         body: JSON.stringify({
           ...params,
           workspaceMode,
+          applyMode: state.agentApplyMode,
           episodeId: state.currentEpisodeId,
           // Explicit create from agent UI — skip intent gate.
           forceAgent: true,

@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useChatStore } from '@/stores/chat-store';
+import { LIA_APP_EVENTS, onLiaAppEvent } from '@/lib/lia-app-events';
 
 export function useHealth() {
   const setHealth = useChatStore(s => s.setOllamaHealth);
@@ -24,9 +25,8 @@ export function useHealth() {
     check();
     const interval = setInterval(check, 60_000);
 
-    // Перепроверяем health сразу после смены настроек Ollama в SettingsDialog.
-    const onSettingsChanged = () => { check(); };
-    window.addEventListener('lia-settings-changed', onSettingsChanged);
+    // Re-check health right after Ollama settings change.
+    const unsubSettings = onLiaAppEvent(LIA_APP_EVENTS.settingsChanged, () => { check(); });
 
     // UI-M3 fix: re-check on window focus. Previously a user returning to the
     // tab waited up to 60s for the Ollama banner to update. Now we re-check
@@ -39,7 +39,7 @@ export function useHealth() {
     return () => {
       cancelled = true;
       clearInterval(interval);
-      window.removeEventListener('lia-settings-changed', onSettingsChanged);
+      unsubSettings();
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [setHealth]);

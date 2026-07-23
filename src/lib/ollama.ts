@@ -17,6 +17,14 @@ import { resolveAgentModelName } from './llm/resolve-agent-model';
 import { reconcileOllamaEnvAndDb, mirrorOllamaToProcessEnv } from './infra/ollama-env-sync';
 import { normalizeOllamaBaseUrl } from './ollama-base-url';
 
+/** Active Ollama num_ctx for /v1 chat completions (single-user; set per stream). */
+let activeOllamaNumCtx: number | undefined;
+
+/** Set explicit num_ctx injected into Ollama OpenAI-compatible requests. */
+export function setOllamaNumCtx(numCtx: number | undefined): void {
+  activeOllamaNumCtx = numCtx;
+}
+
 // ============================================================================
 // Settings persistence — load from DB on first call.
 // ============================================================================
@@ -217,9 +225,28 @@ async function getOllamaProvider() {
     name: 'ollama',
     baseURL: `${currentBaseUrl}/v1`,
     apiKey: 'ollama',
+    fetch: async (input, init) => {
+      if (activeOllamaNumCtx && init?.body && typeof init.body === 'string') {
+        try {
+          const body = JSON.parse(init.body) as Record<string, unknown>;
+          const prev = (body.options as Record<string, unknown> | undefined) ?? {};
+          body.options = { ...prev, num_ctx: activeOllamaNumCtx };
+          init = { ...init, body: JSON.stringify(body) };
+        } catch {
+          // leave body unchanged
+        }
+      }
+      return fetch(input, init);
+    },
   });
   providerBaseUrl = currentBaseUrl;
   return provider;
+}
+
+/** Invalidate cached provider so num_ctx fetch-wrapper is always attached after HMR. */
+export function invalidateOllamaProvider(): void {
+  provider = null;
+  providerBaseUrl = '';
 }
 
 /**
@@ -646,7 +673,8 @@ const HEALTH_TTL = 30_000;
 
 export async function checkOllamaHealth(options?: { timeoutMs?: number }): Promise<{ ok: boolean; models: string[]; error?: string }> {
   const timeoutMs = options?.timeoutMs ?? 15_000;
-  if (healthCache && Date.now() - healthCache.ts < HEALTH_TTL && !options?.timeoutMs) {
+  // Always prefer warm cache — timeoutMs only applies on cache miss (dedupe preflight).
+  if (healthCache && Date.now() - healthCache.ts < HEALTH_TTL) {
     return healthCache;
   }
   await loadSettings();

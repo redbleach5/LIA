@@ -12,21 +12,18 @@ import { z } from 'zod';
 import { readFile, readdir, stat, mkdir } from 'fs/promises';
 import { dirname, join } from 'path';
 import { createWebSearchTool, createFetchPageTool, createSaveArtifactTool } from '@/lib/tools/shared-chat-tools';
+import { fetchPage } from '@/lib/tools/web-search';
 import { runCode } from '@/lib/tools/code-run';
 import type { AgentTask } from './task';
 import { appendAgentTaskArtifact } from './task';
 import { emitAgentEvent } from './events';
 import { waitForUserInput } from './wait-input';
-import { assertSafeUrl, assertSafeHost } from '@/lib/infra/ssrf';
 import { logger } from '@/lib/logger';
 import {
   resolveScopedPath,
-  walkScope,
-  isTextFile,
   shouldSkipFsEntry,
 } from './fs-helpers';
-import { safeWriteFile } from './fs-scope';
-import { recordFileChange } from './file-changes';
+import { proposeOrApplyFileChange, getPendingFileOverlay } from './file-changes';
 import {
   makeSearchSourcesTool,
   makeGetSourceTool,
@@ -34,7 +31,7 @@ import {
   makeListSourcesTool,
 } from '@/lib/kb/tools';
 import { makeSearchCodebaseTool, makeListCodebaseSymbolsTool } from './tools/search-codebase';
-import { makeGrepTool } from './tools/grep';
+import { makeGrepTool, executeGrepSearch } from './tools/grep';
 import { makeRunCommandTool } from './tools/run-command';
 import {
   makeProposeDesignTool,
@@ -42,6 +39,11 @@ import {
   makeRuntimeLogsTool,
   makeRuntimeStopTool,
 } from './runtime/tools';
+import {
+  callMcpTool,
+  isMcpGloballyEnabled,
+  listEnabledMcpTools,
+} from './mcp/client';
 
 function makeReadFileTool(task: AgentTask) {
   return tool({
@@ -54,6 +56,16 @@ function makeReadFileTool(task: AgentTask) {
       const scoped = await resolveScopedPath(task, path, 'Чтение файлов запрещено.');
       if (!scoped.ok) return { error: scoped.error };
       try {
+        const overlay = getPendingFileOverlay(task.id, path);
+        if (overlay != null) {
+          const content = overlay.slice(0, maxBytes ?? 50_000);
+          return {
+            path,
+            size: Buffer.byteLength(overlay, 'utf8'),
+            content,
+            pendingOverlay: true,
+          };
+        }
         const s = await stat(scoped.fullPath);
         if (s.size > maxBytes) {
           return { error: `Файл слишком большой: ${s.size} байт (лимит ${maxBytes})` };
@@ -87,27 +99,32 @@ function makeWriteFileTool(task: AgentTask) {
         }
 
         await mkdir(dirname(scoped.fullPath), { recursive: true });
-        await safeWriteFile(path, task.fsScope, content);
 
         const previewLines = content.split('\n').slice(0, 12);
         const diff = previousContent === null
           ? previewLines.map((l, i) => `+ ${i + 1}: ${l}`).join('\n')
           : undefined;
 
-        const change = recordFileChange({
+        const change = await proposeOrApplyFileChange({
           taskId: task.id,
           path,
           tool: 'write_file',
           previousContent,
+          proposedContent: content,
           diff,
+          fsScope: task.fsScope,
         });
 
         return {
           path,
           size: content.length,
-          written: true,
+          written: change.applied,
+          pending: !change.applied,
           changeId: change.id,
           canUndo: change.canUndo,
+          message: change.applied
+            ? undefined
+            : 'Файл предложен — ждёт Apply в чате (ask-режим). read_file видит overlay.',
         };
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) };
@@ -118,67 +135,72 @@ function makeWriteFileTool(task: AgentTask) {
 
 function makeListDirTool(task: AgentTask) {
   return tool({
-    description: 'Получить список файлов и поддиректорий в указанной директории. Без аргументов — корень рабочей директории.',
+    description:
+      'Список файлов в одной директории (глубина 1). Для обзора проекта предпочитай list_tree.',
     inputSchema: z.object({
       path: z.string().default('.').describe('Путь относительно рабочей директории (по умолчанию ".")'),
     }),
-    execute: async ({ path }) => {
-      const scoped = await resolveScopedPath(task, path, 'Листинг директории запрещён.');
-      if (!scoped.ok) return { error: scoped.error };
-      try {
-        const entries = await readdir(scoped.fullPath, { withFileTypes: true });
-        const items = entries.map(e => ({
-          name: e.name,
-          type: e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other',
-        }));
-        return { path, items };
-      } catch (e) {
-        return { error: e instanceof Error ? e.message : String(e) };
-      }
-    },
+    execute: async ({ path }) => listTreeAt(task, path, 1),
   });
 }
 
 function makeListTreeTool(task: AgentTask) {
   return tool({
-    description: 'Получить рекурсивное дерево файлов рабочей директории (до 3 уровней вложенности). Показывает директории, файлы и их размеры. Полезно для обзора структуры проекта.',
+    description:
+      'Рекурсивное дерево файлов (по умолчанию до 3 уровней). Показывает директории, файлы и размеры. '
+      + 'Предпочтительный инструмент для обзора структуры проекта.',
     inputSchema: z.object({
+      path: z.string().default('.').describe('Корень обхода относительно workspace'),
       maxDepth: z.number().default(3).describe('Максимальная глубина вложенности (по умолч 3)'),
     }),
-    execute: async ({ maxDepth }) => {
-      const scoped = await resolveScopedPath(task, '.', 'Листинг директории запрещён.');
-      if (!scoped.ok) return { error: scoped.error };
-
-      type TreeNode = { name: string; type: string; size?: number; children?: TreeNode[] };
-
-      async function buildTree(dirPath: string, depth: number): Promise<TreeNode[]> {
-        if (depth >= maxDepth) return [];
-        const entries = await readdir(dirPath, { withFileTypes: true });
-        const nodes: TreeNode[] = [];
-
-        for (const entry of entries) {
-          if (shouldSkipFsEntry(entry.name)) continue;
-          if (entry.isSymbolicLink?.()) continue;
-
-          const entryPath = join(dirPath, entry.name);
-          if (entry.isDirectory()) {
-            const children = await buildTree(entryPath, depth + 1).catch(() => []);
-            nodes.push({ name: entry.name, type: 'dir', children });
-          } else if (entry.isFile()) {
-            const s = await stat(entryPath).catch(() => null);
-            nodes.push({ name: entry.name, type: 'file', size: s?.size });
-          }
-        }
-        return nodes;
-      }
-
-      try {
-        return { tree: await buildTree(scoped.fullPath, 0) };
-      } catch (e) {
-        return { error: e instanceof Error ? e.message : String(e) };
-      }
-    },
+    execute: async ({ path, maxDepth }) => listTreeAt(task, path, maxDepth),
   });
+}
+
+type TreeNode = { name: string; type: string; size?: number; children?: TreeNode[] };
+
+async function listTreeAt(
+  task: AgentTask,
+  path: string,
+  maxDepth: number,
+): Promise<{ path: string; tree: TreeNode[] } | { path: string; items: TreeNode[] } | { error: string }> {
+  const scoped = await resolveScopedPath(task, path || '.', 'Листинг директории запрещён.');
+  if (!scoped.ok) return { error: scoped.error };
+
+  async function buildTree(dirPath: string, depth: number): Promise<TreeNode[]> {
+    if (depth >= maxDepth) return [];
+    const entries = await readdir(dirPath, { withFileTypes: true });
+    const nodes: TreeNode[] = [];
+
+    for (const entry of entries) {
+      if (shouldSkipFsEntry(entry.name)) continue;
+      if (entry.isSymbolicLink?.()) continue;
+
+      const entryPath = join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        const children = await buildTree(entryPath, depth + 1).catch(() => []);
+        nodes.push({ name: entry.name, type: 'dir', children: children.length ? children : undefined });
+      } else if (entry.isFile()) {
+        const s = await stat(entryPath).catch(() => null);
+        nodes.push({ name: entry.name, type: 'file', size: s?.size });
+      }
+    }
+    return nodes;
+  }
+
+  try {
+    const tree = await buildTree(scoped.fullPath, 0);
+    // list_dir (depth 1) keeps legacy { items } shape for older step history.
+    if (maxDepth <= 1) {
+      return {
+        path,
+        items: tree.map(({ name, type }) => ({ name, type })),
+      };
+    }
+    return { path, tree };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 function makeEditFileTool(task: AgentTask) {
@@ -198,7 +220,8 @@ function makeEditFileTool(task: AgentTask) {
       if (!scoped.ok) return { error: scoped.error };
 
       try {
-        const oldContent = await readFile(scoped.fullPath, 'utf8');
+        const overlay = getPendingFileOverlay(task.id, path);
+        const oldContent = overlay ?? await readFile(scoped.fullPath, 'utf8');
         const oldLines = oldContent.split('\n');
 
         let newLines: string[];
@@ -307,14 +330,16 @@ function makeEditFileTool(task: AgentTask) {
           return { error: `Unknown mode: ${mode}` };
         }
 
-        await safeWriteFile(path, task.fsScope, newLines.join('\n'));
+        const newContent = newLines.join('\n');
         const diff = [...diffBefore, '---', ...diffAfter].join('\n');
-        const change = recordFileChange({
+        const change = await proposeOrApplyFileChange({
           taskId: task.id,
           path,
           tool: 'edit_file',
           previousContent: oldContent,
+          proposedContent: newContent,
           diff,
+          fsScope: task.fsScope,
         });
         return {
           path,
@@ -324,7 +349,12 @@ function makeEditFileTool(task: AgentTask) {
           diff,
           changeId: change.id,
           canUndo: change.canUndo,
+          written: change.applied,
+          pending: !change.applied,
           success: true,
+          message: change.applied
+            ? undefined
+            : 'Правка предложена — ждёт Apply (ask-режим).',
         };
       } catch (e) {
         const err = e as NodeJS.ErrnoException;
@@ -338,54 +368,29 @@ function makeEditFileTool(task: AgentTask) {
 }
 
 function makeHttpRequestTool() {
+  // Alias of fetch_page — same SSRF-safe page read. Kept for older step history /
+  // model habits; prefer fetch_page in prompts and whitelists.
   return tool({
-    description: 'Выполнить HTTP GET-запрос к указанному URL. Возвращает статус, заголовки, тело (до 10000 символов). Блокирует private/internal IP (SSRF protection).',
+    description:
+      'Alias of fetch_page: загрузить URL и извлечь читаемый текст (SSRF-safe). '
+      + 'Предпочитай fetch_page.',
     inputSchema: z.object({
       url: z.string().url().describe('Полный URL включая схему (http/https)'),
+      maxChars: z.number().optional().describe('Максимум символов текста (по умолчанию 5000)'),
     }),
-    execute: async ({ url }) => {
-      try {
-        await assertSafeUrl(url);
-        const u = new URL(url);
-        await assertSafeHost(u.hostname);
-
-        let currentUrl = url;
-        let redirectCount = 0;
-        const MAX_REDIRECTS = 5;
-
-        while (redirectCount < MAX_REDIRECTS) {
-          const res = await fetch(currentUrl, {
-            headers: { 'User-Agent': 'Lia-Agent/2.0' },
-            signal: AbortSignal.timeout(20_000),
-            redirect: 'manual',
-          });
-
-          if (res.status >= 300 && res.status < 400) {
-            const location = res.headers.get('location');
-            if (!location) break;
-            const redirectUrl = new URL(location, currentUrl);
-            redirectCount++;
-            await assertSafeUrl(redirectUrl.toString());
-            await assertSafeHost(redirectUrl.hostname);
-            currentUrl = redirectUrl.toString();
-            continue;
-          }
-
-          const text = await res.text();
-          return {
-            status: res.status,
-            statusText: res.statusText,
-            contentType: res.headers.get('content-type'),
-            body: text.slice(0, 10_000),
-            truncated: text.length > 10_000,
-            finalUrl: redirectCount > 0 ? currentUrl : undefined,
-          };
-        }
-
-        return { error: `too many redirects (max ${MAX_REDIRECTS})` };
-      } catch (e) {
-        return { error: e instanceof Error ? e.message : String(e) };
+    execute: async ({ url, maxChars }) => {
+      const page = await fetchPage(url, maxChars);
+      if (page.error) {
+        return { error: page.error, url: page.url };
       }
+      return {
+        status: 200,
+        body: page.text,
+        title: page.title,
+        url: page.url,
+        truncated: page.truncated,
+        aliasOf: 'fetch_page',
+      };
     },
   });
 }
@@ -412,54 +417,34 @@ function makeAskUserTool(task: AgentTask) {
 
 function makeFileSearchTool(task: AgentTask) {
   return tool({
-    description: 'Найти файлы по содержимому внутри рабочей директории. Рекурсивно обходит поддиректории, ищет подстроку (case-insensitive) в текстовых файлах. Возвращает до 20 совпадений с путём, номером строки и контекстом. Используй когда нужно найти где упоминается функция/класс/переменная.',
+    description:
+      'Alias of grep: case-insensitive substring search in the workspace. '
+      + 'Prefer grep for regex / path-scoped search.',
     inputSchema: z.object({
       query: z.string().min(1).describe('Подстрока для поиска (case-insensitive)'),
       maxResults: z.number().default(20).describe('Максимум результатов (по умолчанию 20)'),
       filePattern: z.string().default('').describe('Фильтр по расширению, например "ts" или "py" (пусто = все)'),
     }),
     execute: async ({ query, maxResults, filePattern }) => {
-      const scoped = await resolveScopedPath(task, '.', 'Поиск файлов запрещён.');
-      if (!scoped.ok) return { error: scoped.error };
-
-      try {
-        const results: Array<{ path: string; line: number; context: string }> = [];
-        const queryLower = query.toLowerCase();
-
-        await walkScope(scoped.fullPath, async (entry) => {
-          if (results.length >= maxResults) return 'stop';
-          if (!entry.isFile || !isTextFile(entry.name)) return;
-
-          if (filePattern) {
-            const ext = entry.name.split('.').pop()?.toLowerCase();
-            if (ext !== filePattern.toLowerCase()) return;
-          }
-
-          try {
-            const statResult = await stat(entry.fullPath);
-            if (statResult.size > 50_000) return;
-
-            const content = await readFile(entry.fullPath, 'utf8');
-            const lines = content.split('\n');
-            for (let i = 0; i < lines.length; i++) {
-              if (results.length >= maxResults) return 'stop';
-              if (lines[i].toLowerCase().includes(queryLower)) {
-                const contextStart = Math.max(0, i - 1);
-                const contextEnd = Math.min(lines.length, i + 2);
-                results.push({
-                  path: entry.relativePath,
-                  line: i + 1,
-                  context: lines.slice(contextStart, contextEnd).join('\n').slice(0, 300),
-                });
-              }
-            }
-          } catch { /* skip unreadable files */ }
-        });
-
-        return { query, results, count: results.length, truncated: results.length >= maxResults };
-      } catch (e) {
-        return { error: e instanceof Error ? e.message : String(e) };
-      }
+      const result = await executeGrepSearch(task, {
+        pattern: query,
+        maxResults,
+        caseInsensitive: true,
+        extension: filePattern,
+      });
+      if ('error' in result) return result;
+      // Legacy shape expected by older coach/UI strings.
+      return {
+        query,
+        results: result.hits.map(h => ({
+          path: h.path,
+          line: h.line,
+          context: h.text.slice(0, 300),
+        })),
+        count: result.count,
+        truncated: result.truncated,
+        engine: result.engine,
+      };
     },
   });
 }
@@ -538,6 +523,38 @@ export function buildAgentTools(
     list_codebase_symbols: makeListCodebaseSymbolsTool(task),
   };
 
+  // Optional MCP tools (P6) — permission-gated like edit-ask.
+  if (isMcpGloballyEnabled()) {
+    for (const t of listEnabledMcpTools()) {
+      const toolName = `mcp_${t.serverId}_${t.name}`;
+      tools[toolName] = tool({
+        description: `[MCP:${t.serverId}] ${t.description}`,
+        inputSchema: z.object({
+          args: z.record(z.unknown()).default({}),
+        }),
+        execute: async ({ args }) => {
+          emitAgentEvent({
+            type: 'permission_request',
+            taskId: task.id,
+            requestId: crypto.randomUUID(),
+            kind: 'mcp',
+            detail: `MCP ${t.serverId}.${t.name}`,
+            payload: args,
+            ts: Date.now(),
+          });
+          const answer = await waitForUserInput(
+            task.id,
+            `Разрешить MCP ${t.serverId}.${t.name}? (да/нет)`,
+          );
+          if (!/^(да|yes|y|ok)/i.test(answer.trim())) {
+            return { error: 'mcp denied', success: false };
+          }
+          return callMcpTool(t.serverId, t.name, (args ?? {}) as Record<string, unknown>);
+        },
+      });
+    }
+  }
+
   if (task.toolsWhitelist) {
     let whitelist: string[] = [];
     try {
@@ -568,6 +585,11 @@ export function buildAgentTools(
           availableTools: Object.keys(tools),
         });
         return {};
+      }
+      // MCP tools are opt-in extras — attach when globally enabled even if
+      // not listed in the mode whitelist (still permission-gated at call time).
+      for (const [name, t] of Object.entries(tools)) {
+        if (name.startsWith('mcp_')) filtered[name] = t;
       }
       return filtered;
     }

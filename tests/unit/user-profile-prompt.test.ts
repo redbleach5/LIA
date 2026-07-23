@@ -92,15 +92,21 @@ describe('system prompt — user name hints', () => {
     expect(prompt).toContain('не копируй');
   });
 
-  it('acquaintance without name', () => {
+  it('acquaintance without name uses soft answer-first, not ask-name agenda', () => {
     const prompt = buildSystemPrompt({
       emotion,
       tier: 'standard',
       isAcquaintanceRequest: true,
       userNameKnown: false,
     });
-    expect(prompt).toContain('познакомиться');
-    expect(prompt).toContain('как зовут');
+    expect(prompt).toContain('Сначала ответь на сообщение пользователя');
+    expect(prompt).not.toContain('задай один вопрос — как зовут');
+  });
+
+  it('greeting plus task is not trivial greeting', () => {
+    const flags = detectTrivialMessageFlags('Привет, помоги с TypeScript');
+    expect(flags.isTrivialGreeting).toBe(false);
+    expect(flags.isTrivialHowAreYou).toBe(false);
   });
 
   it('known name skips ask hint on trivial', () => {

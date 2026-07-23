@@ -10,20 +10,71 @@ import { EventEmitter } from 'events';
 const globalKey = '__lia_agent_events__';
 
 export type AgentEvent =
-  | { type: 'task_started'; taskId: string; goal: string; ts: number }
-  | { type: 'task_planning'; taskId: string; ts: number }
-  | { type: 'task_plan_ready'; taskId: string; plan: { goal: string; steps: string[]; complexity: string }; ts: number }
-  | { type: 'step_start'; taskId: string; step: number; maxSteps: number; thought: string; ts: number }
-  | { type: 'step_end'; taskId: string; step: number; action: string; observation: string; thought: string; durationMs: number; ts: number }
-  | { type: 'tool_start'; taskId: string; step: number; tool: string; input: unknown; ts: number }
-  | { type: 'tool_end'; taskId: string; step: number; tool: string; success: boolean; output: unknown; ts: number }
-  | { type: 'task_waiting_input'; taskId: string; question: string; ts: number }
-  | { type: 'task_synthesizing'; taskId: string; ts: number }
-  | { type: 'task_done'; taskId: string; resultSummary: string; chatMessageId?: string; ts: number }
-  | { type: 'task_failed'; taskId: string; error: string; chatMessageId?: string; ts: number }
-  | { type: 'task_cancelled'; taskId: string; chatMessageId?: string; ts: number }
-  | { type: 'artifact_saved'; taskId: string; step: number; filename: string; url: string; ts: number }
-  | { type: 'file_changed'; taskId: string; step: number; changeId: string; path: string; tool: 'edit_file' | 'write_file'; diff?: string; canUndo: boolean; ts: number }
+  | { type: 'task_started'; taskId: string; goal: string; ts: number; eventId?: string }
+  | { type: 'task_planning'; taskId: string; ts: number; eventId?: string }
+  | { type: 'task_plan_ready'; taskId: string; plan: { goal: string; steps: string[]; complexity: string }; ts: number; eventId?: string }
+  | { type: 'step_start'; taskId: string; step: number; maxSteps: number; thought: string; ts: number; eventId?: string }
+  | { type: 'step_end'; taskId: string; step: number; action: string; observation: string; thought: string; durationMs: number; ts: number; eventId?: string }
+  | { type: 'tool_start'; taskId: string; step: number; tool: string; input: unknown; ts: number; eventId?: string }
+  | { type: 'tool_end'; taskId: string; step: number; tool: string; success: boolean; output: unknown; ts: number; eventId?: string }
+  | { type: 'task_waiting_input'; taskId: string; question: string; ts: number; eventId?: string }
+  | { type: 'task_synthesizing'; taskId: string; ts: number; eventId?: string }
+  | { type: 'task_done'; taskId: string; resultSummary: string; chatMessageId?: string; ts: number; eventId?: string }
+  | { type: 'task_failed'; taskId: string; error: string; chatMessageId?: string; ts: number; eventId?: string }
+  | { type: 'task_cancelled'; taskId: string; chatMessageId?: string; ts: number; eventId?: string }
+  | { type: 'artifact_saved'; taskId: string; step: number; filename: string; url: string; ts: number; eventId?: string }
+  | {
+      type: 'file_changed';
+      taskId: string;
+      step: number;
+      changeId: string;
+      path: string;
+      tool: 'edit_file' | 'write_file';
+      diff?: string;
+      canUndo: boolean;
+      /** Ask-mode: waiting for Apply (disk not yet written). */
+      pending?: boolean;
+      ts: number;
+      eventId?: string;
+    }
+  | {
+      type: 'assistant_delta';
+      taskId: string;
+      text: string;
+      ts: number;
+      eventId?: string;
+    }
+  | {
+      type: 'edit_applied';
+      taskId: string;
+      changeId: string;
+      path: string;
+      tool: 'edit_file' | 'write_file';
+      diff?: string;
+      canUndo: boolean;
+      step?: number;
+      ts: number;
+      eventId?: string;
+    }
+  | {
+      type: 'edit_rejected';
+      taskId: string;
+      changeId: string;
+      path: string;
+      step?: number;
+      ts: number;
+      eventId?: string;
+    }
+  | {
+      type: 'permission_request';
+      taskId: string;
+      requestId: string;
+      kind: 'shell' | 'network' | 'mcp' | 'write';
+      detail: string;
+      payload?: unknown;
+      ts: number;
+      eventId?: string;
+    }
   | {
       type: 'design_proposed';
       taskId: string;
@@ -40,6 +91,7 @@ export type AgentEvent =
       };
       autoAccepted: boolean;
       ts: number;
+      eventId?: string;
     }
   | {
       type: 'runtime_log';
@@ -47,6 +99,7 @@ export type AgentEvent =
       stream: 'stdout' | 'stderr' | 'system';
       text: string;
       ts: number;
+      eventId?: string;
     }
   | {
       type: 'runtime_status';
@@ -59,6 +112,7 @@ export type AgentEvent =
       lastError?: string | null;
       scriptKey?: string | null;
       ts: number;
+      eventId?: string;
     };
 
 function getEmitter(): EventEmitter {

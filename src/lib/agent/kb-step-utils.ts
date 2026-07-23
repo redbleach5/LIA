@@ -10,7 +10,7 @@ import {
 /** Agent step action/observation shape (ReAct loop). */
 export type AgentStepSlice = { action: string; observation: string };
 
-const KB_TOOL_RE = /search_sources|read_folder_file|get_source|get_ticket/;
+const KB_TOOL_RE = /search_sources|read_folder_file|get_source/;
 
 /**
  * Tool whitelist for pure «найти в базе знаний» lookup goals.
@@ -21,8 +21,6 @@ export const KB_LOOKUP_TOOL_WHITELIST = [
   'get_source',
   'read_folder_file',
   'list_sources',
-  'search_tickets',
-  'get_ticket',
   'ask_user',
 ] as const;
 

@@ -51,7 +51,7 @@ describe('chat prompt profile P1', () => {
       tier: 'standard',
       isTrivialGreeting: true,
     });
-    expect(prompt).toContain('=== ХАРАКТЕР (кратко) ===');
+    expect(prompt).toContain('Ты — Лия, женщина, живой собеседник');
     expect(prompt).not.toContain('=== ТВОИ ЦЕННОСТИ ===');
   });
 

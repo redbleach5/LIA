@@ -4,6 +4,7 @@
  * Pure heuristics (no LLM). Safe for client + server.
  */
 
+import { detectAcquaintanceRequest } from '@/lib/chat/message-heuristics';
 import {
   classifyTaskComplexity,
   isAgentTask,
@@ -60,12 +61,13 @@ export function hasAgentWorkIntent(message: string): boolean {
 
 function isVagueAsk(message: string): boolean {
   const text = message.trim();
+  // Identity / acquaintance is never an agent confirm — answer in chat.
+  if (detectAcquaintanceRequest(text)) return false;
   if (ASK_PATTERNS.some(p => p.test(text))) return true;
-  // Very short non-greeting without punctuation → ambiguous
+  // Very short non-greeting without punctuation → ambiguous work crumb
   if (text.length <= 24 && !/[.?!]/.test(text) && !/\s{2,}/.test(text)) {
     const complexity = classifyTaskComplexity(text);
     if (complexity === 'simple' || complexity === 'trivial') {
-      // Greetings already handled as chat; leftover short crumbs → ask
       if (!isConversationalMessage(text, complexity)) return true;
     }
   }
@@ -75,13 +77,16 @@ function isVagueAsk(message: string): boolean {
 /**
  * Decide how to handle a message while UI mode is Agent.
  *
- * - chat — smalltalk / trivial; answer via chat pipeline, keep Agent mode sticky
+ * - chat — smalltalk / questions / trivial; answer via chat pipeline, keep Agent mode sticky
  * - agent — clear multi-step / code / file work
- * - ask — short ambiguous; confirm with user
+ * - ask — short ambiguous work crumbs («помоги»); confirm with user
  */
 export function classifyAgentRoute(message: string): AgentRoute {
   const text = message.trim();
   if (!text) return 'chat';
+
+  // «Кто ты?» / знакомиться — always dialogue, never Agent-or-Dialog nag.
+  if (detectAcquaintanceRequest(text)) return 'chat';
 
   if (hasAgentWorkIntent(text)) return 'agent';
 
@@ -92,9 +97,10 @@ export function classifyAgentRoute(message: string): AgentRoute {
     return 'chat';
   }
 
-  // Short simple questions without work markers → confirm
+  // Short simple asks without work markers → chat (not confirm dialog).
+  // Confirm («Агент или диалог?») only for explicit vague crumbs via isVagueAsk.
   if (text.length < 80 && complexity === 'simple' && !text.includes('\n')) {
-    return 'ask';
+    return 'chat';
   }
 
   // Explicit Agent mode + non-trivial content → trust the user

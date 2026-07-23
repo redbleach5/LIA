@@ -24,7 +24,7 @@ import 'server-only';
 // через sourceIds (пока source ещё не pruned).
 //
 // Запускается на server startup + каждые 6 часов. HMR-safe через globalThis.
-// Controlled by LIA_REFLECTION_ENGINE env var (default: true).
+// Controlled by LIA_REFLECTION_ENGINE env var (default: OFF — opt-in with =true).
 
 import { db } from '@/lib/db';
 import { embed } from '@/lib/ollama';
@@ -115,7 +115,7 @@ async function runReflection(): Promise<{
   anchorsConsolidated: number;
   summariesCreated: number;
 }> {
-  if (process.env.LIA_REFLECTION_ENGINE === 'false') {
+  if (process.env.LIA_REFLECTION_ENGINE !== 'true') {
     return { groupsProcessed: 0, anchorsConsolidated: 0, summariesCreated: 0 };
   }
 

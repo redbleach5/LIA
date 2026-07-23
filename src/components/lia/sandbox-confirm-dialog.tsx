@@ -48,6 +48,7 @@ export function SandboxConfirmDialog() {
           goal,
           autoStart: true,
           workspaceMode,
+          applyMode: useChatStore.getState().agentApplyMode,
           confirmSandbox: true,
           forceAgent: true,
           ...(template ? { template } : {}),

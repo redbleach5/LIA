@@ -8,26 +8,25 @@ import {
 import type { TaskComplexity } from '@/lib/task-complexity';
 
 function plan(tier: 'micro' | 'standard' | 'plus' | 'max', complexity: TaskComplexity) {
-  return planExecution({ mode: 'auto', tier, complexity, profile: null });
+  return planExecution({ mode: 'auto', tier, complexity });
 }
 
 describe('planExecution', () => {
-  it('agent mode returns agent plan with tools always enabled', () => {
+  it('agent mode returns agent plan with tools; deliberate always off (latency pass)', () => {
     const p = planExecution({
       mode: 'agent',
       tier: 'standard',
       complexity: 'moderate',
-      profile: null,
     });
     expect(p.mode).toBe('agent');
     expect(p.toolsEnabled).toBe(true);
-    expect(p.deliberate).toBe(true);
-    expect(p.selfCheck).toBe(true);
-    expect(p.calls).toBe(2);
+    expect(p.deliberate).toBe(false);
+    expect(p.selfCheck).toBe(false);
+    expect(p.calls).toBe(1);
     expect(p.maxTokens).toBe(4096); // standard tierParams.maxTokens
     expect(p.autoWebSearch).toBe(true);
-    expect(shouldDeliberate(p)).toBe(true);
-    expect(shouldSelfCheck(p)).toBe(true);
+    expect(shouldDeliberate(p)).toBe(false);
+    expect(shouldSelfCheck(p)).toBe(false);
   });
 
   it('agent mode maxTokens follows tier (max)', () => {
@@ -35,31 +34,19 @@ describe('planExecution', () => {
       mode: 'agent',
       tier: 'max',
       complexity: 'complex',
-      profile: null,
     });
     expect(p.maxTokens).toBe(16384);
   });
 
-  describe('standard tier — latency tradeoff on easy traffic; depth on hard work', () => {
-    it.each(['trivial', 'simple', 'moderate'] as TaskComplexity[])(
-      'complexity=%s: single-call, no meta-reasoning',
+  describe('standard tier — latency pass: no deliberate; tools off on light turns', () => {
+    it.each(['trivial', 'simple', 'moderate', 'complex', 'research'] as TaskComplexity[])(
+      'complexity=%s: deliberate off, single-call',
       (complexity) => {
         const p = plan('standard', complexity);
         expect(p.deliberate).toBe(false);
         expect(p.selfCheck).toBe(false);
         expect(p.calls).toBe(1);
-      },
-    );
-
-    it.each(['complex', 'research'] as TaskComplexity[])(
-      'complexity=%s: deliberate + selfCheck enabled',
-      (complexity) => {
-        const p = plan('standard', complexity);
-        expect(p.deliberate).toBe(true);
-        expect(p.selfCheck).toBe(true);
-        expect(p.calls).toBe(2);
-        expect(shouldDeliberate(p)).toBe(true);
-        expect(shouldSelfCheck(p)).toBe(true);
+        expect(shouldDeliberate(p)).toBe(false);
       },
     );
 
@@ -71,17 +58,19 @@ describe('planExecution', () => {
       expect(plan('standard', 'simple').autoWebSearch).toBe(false);
     });
 
-    it('tools stay enabled via tier params', () => {
+    it('tools off on trivial/simple; on for moderate+', () => {
+      expect(plan('standard', 'trivial').toolsEnabled).toBe(false);
+      expect(plan('standard', 'simple').toolsEnabled).toBe(false);
       expect(plan('standard', 'moderate').toolsEnabled).toBe(true);
     });
   });
 
-  describe('plus tier — deliberate on moderate+', () => {
-    it('moderate uses 2 calls with deliberate and selfCheck', () => {
+  describe('plus tier — deliberate always off', () => {
+    it('moderate is single-call without deliberate', () => {
       const p = plan('plus', 'moderate');
-      expect(p.calls).toBe(2);
-      expect(p.deliberate).toBe(true);
-      expect(p.selfCheck).toBe(true);
+      expect(p.calls).toBe(1);
+      expect(p.deliberate).toBe(false);
+      expect(p.selfCheck).toBe(false);
       expect(p.maxTokens).toBe(4096);
     });
 
@@ -96,11 +85,11 @@ describe('planExecution', () => {
     });
   });
 
-  describe('max tier — highest budgets', () => {
-    it('complex uses 4 calls and 16k max tokens', () => {
+  describe('max tier — highest token budgets, no deliberate', () => {
+    it('complex uses 16k max tokens, single call', () => {
       const p = plan('max', 'complex');
-      expect(p.calls).toBe(4);
-      expect(p.deliberate).toBe(true);
+      expect(p.calls).toBe(1);
+      expect(p.deliberate).toBe(false);
       expect(p.maxTokens).toBe(16384);
     });
   });
@@ -120,38 +109,34 @@ describe('planExecution', () => {
 });
 
 describe('shouldDeliberate', () => {
-  it('is false when deliberate flag is off even with calls>=2', () => {
-    const p = plan('standard', 'moderate');
-    expect(p.deliberate).toBe(false);
-    expect(shouldDeliberate(p)).toBe(false);
+  it('is always false (latency pass)', () => {
+    expect(shouldDeliberate(plan('standard', 'moderate'))).toBe(false);
+    expect(shouldDeliberate(plan('plus', 'moderate'))).toBe(false);
+    expect(shouldDeliberate(plan('max', 'research'))).toBe(false);
   });
 
-  it('is true when deliberate and calls>=2 (plus moderate)', () => {
-    const p = plan('plus', 'moderate');
-    expect(shouldDeliberate(p)).toBe(true);
-  });
-
-  it('is false when deliberate but calls=1', () => {
+  it('stays false even if a plan claims deliberate with calls>=2', () => {
     const p: ExecutionPlan = {
       ...plan('plus', 'trivial'),
       deliberate: true,
-      calls: 1,
+      calls: 2,
     };
     expect(shouldDeliberate(p)).toBe(false);
   });
 });
 
 describe('shouldSelfCheck', () => {
-  it('mirrors shouldDeliberate gating (calls>=2 required)', () => {
+  it('is always false — streaming cannot revise the answer', () => {
     expect(shouldSelfCheck(plan('standard', 'moderate'))).toBe(false);
-    expect(shouldSelfCheck(plan('plus', 'moderate'))).toBe(true);
+    expect(shouldSelfCheck(plan('plus', 'moderate'))).toBe(false);
+    expect(shouldSelfCheck(plan('max', 'research'))).toBe(false);
   });
 
-  it('is false when selfCheck off on plus-tier slice with forced calls=1', () => {
+  it('stays false even if a plan claims selfCheck with calls>=2', () => {
     const p: ExecutionPlan = {
-      ...plan('plus', 'simple'),
+      ...plan('plus', 'complex'),
       selfCheck: true,
-      calls: 1,
+      calls: 4,
     };
     expect(shouldSelfCheck(p)).toBe(false);
   });

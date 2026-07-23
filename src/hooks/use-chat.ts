@@ -198,6 +198,7 @@ export function useChat() {
 
         try {
           const workspaceMode = useChatStore.getState().agentWorkspaceMode;
+          const applyMode = useChatStore.getState().agentApplyMode;
           const res = await fetch('/api/agent', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -206,6 +207,7 @@ export function useChat() {
               goal: trimmed,
               autoStart: true,
               workspaceMode,
+              applyMode,
               fsScope: undefined,
               ...(skipGate ? { forceAgent: true } : {}),
             }),
@@ -397,6 +399,16 @@ export function useChat() {
             const emotion = JSON.parse(emotionHeader);
             useChatStore.getState().setEmotion(emotion);
           } catch { /* ignore */ }
+        }
+
+        // Align optimistic user id with DB id from the stream response.
+        const serverUserMsgId = res.headers.get('X-Message-Id');
+        if (serverUserMsgId) {
+          useChatStore.setState((s) => ({
+            messages: s.messages.map(m =>
+              m.id === userMsg.id ? { ...m, id: serverUserMsgId } : m,
+            ),
+          }));
         }
       }
 

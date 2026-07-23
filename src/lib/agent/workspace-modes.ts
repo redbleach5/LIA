@@ -16,8 +16,6 @@ export const READ_TOOLS = [
   'get_source',
   'read_folder_file',
   'list_sources',
-  'search_tickets',
-  'get_ticket',
   'ask_user',
   'web_search',
   'fetch_page',
@@ -43,7 +41,8 @@ export const EDIT_TOOLS = [
   'run_command',
   'code_run',
   'save_artifact',
-  'http_request',
+  // http_request removed from whitelist — alias of fetch_page still registered
+  // for legacy tool calls, but models should use fetch_page.
   'propose_design',
   'runtime_start',
   'runtime_logs',

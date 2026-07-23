@@ -9,6 +9,7 @@ import {
   parseAvatarConfig,
   type AvatarConfig,
 } from '@/lib/avatar-config';
+import { LIA_APP_EVENTS, dispatchLiaAppEvent, onLiaAppEvent } from '@/lib/lia-app-events';
 
 export type PresenceAvatarState = {
   settingsReady: boolean;
@@ -22,7 +23,7 @@ export type PresenceAvatarState = {
 };
 
 function notifySettingsChanged() {
-  window.dispatchEvent(new CustomEvent('lia-settings-changed'));
+  dispatchLiaAppEvent(LIA_APP_EVENTS.settingsChanged);
 }
 
 export function usePresenceAvatar(): PresenceAvatarState {
@@ -52,8 +53,7 @@ export function usePresenceAvatar(): PresenceAvatarState {
         });
     };
     loadSettings();
-    window.addEventListener('lia-settings-changed', loadSettings);
-    return () => window.removeEventListener('lia-settings-changed', loadSettings);
+    return onLiaAppEvent(LIA_APP_EVENTS.settingsChanged, loadSettings);
   }, []);
 
   const handleVrmError = useCallback(() => {

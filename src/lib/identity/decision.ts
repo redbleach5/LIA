@@ -4,15 +4,12 @@ import 'server-only';
 // LiaDecision — решение Лии как ответить.
 // ============================================================================
 //
-  // Это результат inner monologue. Лия САМА решает:
+// Результат inner monologue. Soft steering for the main answer:
 //   - action: что делать (помочь / отказать / уточнить)
 //   - desiredTone: какой тон она хочет (не команда, а её желание)
 //   - willingnessToHelp: насколько она хочет помочь (0..1)
 //   - emotionalExpression: какую эмоцию она хочет выразить
-//   - motivation: почему (кратко inject в system prompt + логирование / RL)
-//
-// Это НЕ замена RL. RL обучает соответствие между state и willingness/tone.
-// Inner monologue — это realtime decision, RL — обученная политика.
+//   - motivation: кратко inject в system prompt + debug log
 //
 // Labels below are the single source of truth for prompt injection
 // (system-prompt) and validation lists (inner-monologue). Keys = enum values.
@@ -77,12 +74,11 @@ export interface LiaDecision {
 
   // Внутренняя мотивация — почему Лия решила так.
   // Кратко inject'ится в system prompt как «внутренняя опора»; также:
-  //   - логирование (debug endpoint)
-  //   - RL reward (alignment signal)
+  //   - логирование (debug)
   //   - audit trail
   motivation: string;
 
-  // Confidence в решении (0..1) — если низкая, можно fallback на упрощённую логику
+  // Confidence в решении (0..1) — logged; does not currently gate fallback
   confidence: number;
 
   // Timestamp для логирования

@@ -74,7 +74,7 @@ describe('parseBody', () => {
     expect(result.data.mode).toBe('auto');
   });
 
-  it('normalizes legacy chat mode fast → auto', async () => {
+  it('rejects legacy chat modes fast/standard/deep', async () => {
     const result = await parseBody(
       jsonRequest('http://localhost/api/chat', {
         text: 'Hi',
@@ -83,9 +83,7 @@ describe('parseBody', () => {
       }),
       chatRequestSchema,
     );
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.mode).toBe('auto');
+    expect(result.success).toBe(false);
   });
 
   it('keeps agent mode', async () => {

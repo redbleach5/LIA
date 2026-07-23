@@ -62,6 +62,27 @@ describe('kb-chat-context', () => {
     )).toBe(false);
   });
 
+  it('does not trigger on ALL-CAPS identifier alone without KB thread', () => {
+    expect(shouldPreSearchKbForChat(
+      'EGTS_SR_ADAS_DATA',
+      [],
+      isKbQuestion,
+    )).toBe(false);
+  });
+
+  it('triggers on explicit KB question stems', () => {
+    expect(shouldPreSearchKbForChat(
+      'найди в базе про лимиты API',
+      [],
+      isKbQuestion,
+    )).toBe(true);
+  });
+
+  it('does not treat generic stack/architecture as KB question', () => {
+    expect(isKbQuestion('какой стек у проекта?')).toBe(false);
+    expect(isKbQuestion('расскажи про архитектуру')).toBe(false);
+  });
+
   it('buildKbSearchQuery carries identifiers from user thread only', () => {
     const q = buildKbSearchQuery('в 245 подзаписи есть movon?', egtsThread);
     expect(q).toContain('egts_sr_adas_data');

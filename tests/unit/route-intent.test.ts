@@ -22,6 +22,16 @@ describe('classifyAgentRoute', () => {
     expect(classifyAgentRoute('нужна помощь')).toBe('ask');
   });
 
+  it('routes who-are-you / acquaintance to chat, not agent confirm', () => {
+    expect(classifyAgentRoute('кто ты')).toBe('chat');
+    expect(classifyAgentRoute('Привет. Кто ты?')).toBe('chat');
+    expect(classifyAgentRoute('расскажи о себе')).toBe('chat');
+  });
+
+  it('routes short simple questions to chat without confirm', () => {
+    expect(classifyAgentRoute('Что такое TypeScript?')).toBe('chat');
+  });
+
   it('trusts agent mode for longer non-trivial asks', () => {
     const goal =
       'Разберись почему сборка падает после обновления зависимостей и предложи план фикса без лишних правок';

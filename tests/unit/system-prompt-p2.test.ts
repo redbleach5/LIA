@@ -47,7 +47,7 @@ describe('inner monologue P2 compact standard', () => {
     const standard = buildInnerMonologuePrompt({ ...base, tier: 'standard' });
     const plus = buildInnerMonologuePrompt({ ...base, tier: 'plus' });
     expect(standard.length).toBeLessThan(plus.length - 400);
-    expect(standard).toContain('=== ХАРАКТЕР (кратко) ===');
+    expect(standard).toContain('Ты — Лия, женщина, живой собеседник');
     expect(plus).toContain('=== ТВОИ ЦЕННОСТИ ===');
   });
 

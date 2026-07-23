@@ -4,6 +4,8 @@
 // On a max-tier model, even simple questions get 1 call (no waste).
 // On any tier, complex questions get the full pipeline.
 
+import { detectAcquaintanceRequest, isPureSocialMessage } from '@/lib/chat/message-heuristics';
+
 export type TaskComplexity = 'trivial' | 'simple' | 'moderate' | 'complex' | 'research';
 
 /** JS \\b — только ASCII; для кириллицы используем includes по стемам. */
@@ -17,15 +19,8 @@ function matchesPatterns(text: string, patterns: RegExp[]): boolean {
   return patterns.some(p => p.test(lower));
 }
 
-// Trivial — greetings, thanks, acknowledgements, light social
-const TRIVIAL_PATTERNS = [
-  /^(привет|здравствуй|здравствуйте|хай|hi|hello|приветик)(?![\p{L}\p{N}])/iu,
-  /^(пока|до свидания|bye|goodbye|увидимся)(?![\p{L}\p{N}])/iu,
-  /^(спасибо|благодарю|thanks|thank you|спс)(?![\p{L}\p{N}])/iu,
-  /^(ок|окей|хорошо|ладно|да|нет|угу|ага)(?![\p{L}\p{N}])/iu,
-  /^(как дела|как ты|что делаешь|как настроение)(?![\p{L}\p{N}])/iu,
-  /^(расскажи|пошути|давай).{0,40}(шутк|анекдот)/iu,
-];
+// Trivial budget is gated by isPureSocialMessage (message-heuristics).
+// Pattern lists below are for research / complex / factual detection only.
 
 /** Companion smalltalk without real work — keep 1-call plans on plus/max. */
 const SOCIAL_CHATTER_STEMS = [
@@ -59,17 +54,17 @@ const FACTUAL_STEMS = [
   'версия', 'release', 'changelog', 'обновлен', 'релиз', 'вышла', 'вышел',
   'когда выйдет', 'дата выхода', 'когда релиз', 'во сколько',
   'сколько стоит', 'цена', 'стоимость', 'купить', 'заказать',
-  'документаци', 'docs', 'documentation', 'спецификаци', 'how to', 'как сделать', 'туториал',
-  'сравни', ' vs ', 'лучше', 'хуже', 'отличи', 'разница между',
   'матч', 'счёт', 'результат', 'турнир', 'чемпионат', 'лига',
   'погода', 'температура', 'курс', 'доллар', 'евро', 'рубл',
 ];
 
-// P-CORE-33 fix: previously used `\b` which is ASCII-only (`\w` = [A-Za-z0-9_]).
-// Cyrillic word boundaries weren't reliably matched — "расскажи" at start of
-// string sometimes passed, sometimes didn't, depending on the JS engine.
+// Narrow: how-to / docs alone used to false-trigger proactive web on coding chat.
+const FACTUAL_EXTERNAL_STEMS = [
+  'документаци', 'docs.google', 'спецификаци',
+];
+
 // Now we use Unicode property escapes `(?<![\p{L}\p{N}])` / `(?![\p{L}\p{N}])`
-// with the `u` flag, consistent with TRIVIAL_PATTERNS (P2-1 fix).
+// with the `u` flag (P2-1 / P-CORE-33).
 const FACTUAL_PATTERNS = [
   /(?<![\p{L}\p{N}])(расскажи (про|о|об))(?![\p{L}\p{N}]).*?(?<![\p{L}\p{N}])(GTA|gta|iPhone|айфон|Tesla|тесла|OpenAI|ChatGPT|GPT|Claude|Gemini|Windows|Android|iOS|macOS|Linux|Ubuntu|Python|JavaScript|TypeScript|React|Next|Vue|Node|Docker|Kubernetes)/iu,
   /(?<![\p{L}\p{N}])(что такое|что это|расскажи про|расскажи о|расскажи об)(?![\p{L}\p{N}]).*?(?<![\p{L}\p{N}])(\d{4}|\d+\.\d+|vs|или)/iu,
@@ -82,13 +77,13 @@ const COMPLEX_MATH_PATTERNS = [
 export function isFactualQuestion(message: string): boolean {
   const lower = message.toLowerCase();
   if (hasStem(lower, FACTUAL_STEMS)) return true;
+  if (hasStem(lower, FACTUAL_EXTERNAL_STEMS)) return true;
   return matchesPatterns(lower, FACTUAL_PATTERNS);
 }
 
 /**
- * Сообщение — разговорное (приветствие, smalltalk, «что делаем»), без запроса
- * внешних фактов. Использует уже существующую классификацию сложности, без
- * отдельных regex-исключений под конкретные фразы.
+ * Сообщение — разговорное (приветствие, smalltalk), без запроса внешних фактов.
+ * Не считать любое `simple` conversational — иначе глушится proactive web search.
  */
 export function isConversationalMessage(message: string, complexity: TaskComplexity): boolean {
   const lower = message.trim().toLowerCase();
@@ -97,11 +92,10 @@ export function isConversationalMessage(message: string, complexity: TaskComplex
   if (isFactualQuestion(message)) return false;
   if (hasStem(lower, RESEARCH_STEMS)) return false;
 
-  if (complexity === 'simple') return true;
+  if (isPureSocialMessage(message)) return true;
 
-  // Длинное сообщение с приветствием в начале — всё ещё smalltalk, если нет research/factual
-  const firstClause = lower.split(/[.!?]/)[0]?.trim() ?? lower;
-  if (TRIVIAL_PATTERNS.some(p => p.test(firstClause))) return true;
+  // Companion smalltalk stems without factual/research markers
+  if (hasStem(lower, SOCIAL_CHATTER_STEMS)) return true;
 
   return false;
 }
@@ -112,10 +106,10 @@ export function isConversationalMessage(message: string, complexity: TaskComplex
  */
 const KB_QUESTION_STEMS = [
   'readme', 'база знан', 'knowledge base', 'kb ', ' kb', 'search_sources',
-  'загружен', 'документ', 'источник', 'папк',
-  'по readme', 'из readme', 'в readme', 'по документу', 'из документа',
-  'проект lia', 'lia v2', 'lia-v2', 'стек', 'stack', 'фреймворк', 'архитектур',
-  'протокол', 'найди в базе', 'найди в документ', 'найди в readme', 'найди в папк',
+  'загруженн', 'документ', 'источник', 'папк',
+  'по readme', 'из readme', 'в readme',
+  'найди в базе', 'найди в документ', 'найди в readme', 'найди в папк',
+  'в базе знан', 'из базы знан', 'по базе знан',
 ];
 
 export function isKbQuestion(message: string): boolean {
@@ -135,6 +129,11 @@ export function isKbQuestion(message: string): boolean {
  */
 export function needsProactiveWebSearch(message: string, complexity: TaskComplexity): boolean {
   if (isKbQuestion(message)) return false;
+  if (isPureSocialMessage(message) || detectAcquaintanceRequest(message)) return false;
+  if (complexity === 'trivial' || complexity === 'simple') {
+    // Light turns: only narrow external-fact stems (news/price/weather/version).
+    if (!isFactualQuestion(message)) return false;
+  }
   if (isConversationalMessage(message, complexity)) return false;
   if (isFactualQuestion(message)) return true;
   if (complexity === 'research') return true;
@@ -181,29 +180,23 @@ export function classifyTaskComplexity(message: string): TaskComplexity {
   const text = message.trim();
   const lower = text.toLowerCase();
 
-  // Length-based signals
-  if (text.length < 20) {
-    // Very short — likely trivial
-    if (TRIVIAL_PATTERNS.some(p => p.test(text))) return 'trivial';
-    // Short KB/tech acronym (СМСВ, EGTS, ADAS) — not smalltalk
-    if (/(?<![\p{L}\p{N}])[\p{Lu}]{2,12}(?![\p{L}\p{N}])/u.test(text)) return 'simple';
-    if (isKbQuestion(text)) return 'simple';
-    // Short but with question mark — simple question
-    if (text.includes('?')) return 'simple';
+  // Pure social (greeting / how-are-you / thanks / ack only) → trivial budget.
+  if (isPureSocialMessage(text)) {
     return 'trivial';
   }
 
-  // Explicit social / ack — never pay deliberate×2 on companion chat.
-  // Do not swallow real questions that only start with «привет».
+  // Length-based signals for short non-pure messages
+  if (text.length < 20) {
+    // Short KB/tech acronym (СМСВ, EGTS, ADAS) — not smalltalk
+    if (/(?<![\p{L}\p{N}])[\p{Lu}]{2,12}(?![\p{L}\p{N}])/u.test(text)) return 'simple';
+    if (isKbQuestion(text)) return 'simple';
+    if (text.includes('?')) return 'simple';
+    return 'simple';
+  }
+
+  // Explicit social / ack stems — keep 1-call when no question; never swallow ?.
   if (text.length < 160 && hasStem(lower, SOCIAL_CHATTER_STEMS)) {
     return text.includes('?') ? 'simple' : 'trivial';
-  }
-  if (
-    text.length < 80
-    && TRIVIAL_PATTERNS.some(p => p.test(text))
-    && !text.includes('?')
-  ) {
-    return 'trivial';
   }
 
   // Check patterns in order of complexity

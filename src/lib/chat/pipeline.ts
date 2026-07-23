@@ -14,9 +14,8 @@ import { logger } from '@/lib/logger';
 import { assessDisagreement } from '@/lib/personality';
 import { getCognitiveParams } from '@/lib/capability-profile';
 import { classifyTaskComplexity } from '@/lib/task-complexity';
-import { planExecution, type CognitiveMode, shouldDeliberate } from '@/lib/cognitive-depth';
+import { planExecution, type CognitiveMode } from '@/lib/cognitive-depth';
 import { saveMessage } from '@/lib/memory/episodes';
-import { runDeliberate } from './deliberate';
 import {
   detectTrivialMessageFlags,
   runChatPreflight,
@@ -87,7 +86,7 @@ export async function runChatPipeline(input: ChatPipelineInput): Promise<ChatPip
   const { profile } = await getCognitiveParams();
   const tier = profile?.tier ?? 'standard';
   const complexity = classifyTaskComplexity(text);
-  const plan = planExecution({ mode: userMode, tier, complexity, profile });
+  const plan = planExecution({ mode: userMode, tier, complexity });
   log.info('chat', 'Execution plan', {
     tier, complexity, planMode: plan.mode, calls: plan.calls,
     deliberate: plan.deliberate, selfCheck: plan.selfCheck,
@@ -115,11 +114,13 @@ export async function runChatPipeline(input: ChatPipelineInput): Promise<ChatPip
     return { response: ethicalBlockResponse(refusal, disagreement.level) };
   }
 
-  // ── 6. Inner monologue / Lia decision ──
+  // ── 6. Lia decision (fallback only — monologue LLM disabled for TTFT) ──
   const trivialFlags = detectTrivialMessageFlags(text);
+
   const { liaDecision, liaIntent, shouldSkipMonologue } = await resolveLiaDecision({
     text, tier, userMode, perceivedEmotion, recentMessages, trivialFlags,
     emotionTriggers: triggers, log,
+    forceSkipMonologue: true,
   });
 
   // ── 7. Save user message + side effects ──
@@ -149,29 +150,17 @@ export async function runChatPipeline(input: ChatPipelineInput): Promise<ChatPip
   } = promptBundle;
   const disagreementLevel = disagreement.level;
 
-  // ── 10. Deliberate (if planned) ──
-  let deliberateContext = '';
-  const skipDeliberate = trivialFlags.isTrivialGreeting
-    || trivialFlags.isTrivialHowAreYou
-    || complexity === 'trivial'
-    || complexity === 'simple';
-  if (shouldDeliberate(plan) && !skipDeliberate) {
-    try {
-      deliberateContext = await runDeliberate(text);
-    } catch (e) {
-      log.warn('chat', 'Deliberate step failed', {}, e);
-    }
-  }
-
-  // ── 11. Main streamText ──
+  // ── 10. Main streamText (no deliberate pre-call) ──
   // H2 fix (2026-07-08): catch synchronous throws, return RU fallback.
   const streamError = { current: null as import('./pipeline-stream').StreamErrorSummary | null };
   let result;
   try {
     result = await runChatStreamText({
-      systemPrompt, deliberateContext, coreMessages, userMode, tier, complexity, plan,
+      systemPrompt, deliberateContext: '', coreMessages, userMode, tier, complexity, plan,
       webSearchContext, kbAnswerLocked, episodeId, text, perceivedEmotion, triggers,
       abortSignal, log, streamError, pinnedSourceIds,
+      modelChoice,
+      contextWindow: profile?.contextWindow ?? 0,
     });
   } catch (e) {
     log.error('chat', 'runChatStreamText threw — returning fallback', {}, e instanceof Error ? e : undefined);

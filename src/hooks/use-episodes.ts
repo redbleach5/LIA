@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useChatStore, type Episode, type ChatAttachmentMeta, type ChatMessage } from '@/stores/chat-store';
 import { abortActiveChatStream } from '@/lib/chat/client-stream-control';
+import { LIA_APP_EVENTS, dispatchLiaAppEvent, onLiaAppEvent } from '@/lib/lia-app-events';
 
 function parseClientAttachments(json: string | null): ChatAttachmentMeta[] | undefined {
   if (!json) return undefined;
@@ -267,12 +268,11 @@ export function useEpisodes() {
         const ep = await createRef.current();
         if (ep) {
           await selectRef.current(ep.id);
-          window.dispatchEvent(new Event('lia-focus-composer'));
+          dispatchLiaAppEvent(LIA_APP_EVENTS.focusComposer);
         }
       })();
     };
-    window.addEventListener('lia-new-episode', handler);
-    return () => window.removeEventListener('lia-new-episode', handler);
+    return onLiaAppEvent(LIA_APP_EVENTS.newEpisode, handler);
   }, []);
 
   return { refresh, create, select, remove, rename, loadOlderMessages };

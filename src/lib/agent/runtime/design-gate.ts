@@ -1,11 +1,12 @@
 import 'server-only';
 
 // ============================================================================
-// Design Gate — propose + persist lia.project.json before scaffold.
+// Project design bootstrap — infer + persist lia.project.json before scaffold.
 // ============================================================================
+// Not a user-facing accept/reject gate: v1 always writes the inferred design.
+// SSE still emits design_proposed for the workbench; agent may refine via
+// propose_design. Writes go only through safeWriteFile (no absolute fallback).
 
-import { writeFile } from 'fs/promises';
-import { join } from 'path';
 import { emitAgentEvent } from '../events';
 import { safeWriteFile } from '../fs-scope';
 import type { AgentTask } from '../task';
@@ -21,13 +22,13 @@ import { logger } from '@/lib/logger';
 
 export type DesignGateResult = {
   design: ProjectDesign;
+  /** Always true in v1 — kept for SSE/UI compatibility. */
   autoAccepted: boolean;
   written: boolean;
 };
 
 /**
- * Run Design Gate for create goals: infer design, emit SSE, write manifest.
- * Complex plans (high) still auto-accept in v1 — UI shows design; agent may refine via propose_design.
+ * Infer design, emit SSE, write manifest via scoped FS only.
  */
 export async function runDesignGate(task: AgentTask): Promise<DesignGateResult | null> {
   if (!task.fsScope) return null;
@@ -50,18 +51,12 @@ export async function runDesignGate(task: AgentTask): Promise<DesignGateResult |
     );
     written = true;
   } catch (e) {
-    // Fallback absolute write if safeWriteFile rejects for edge cases
-    try {
-      await writeFile(join(task.fsScope, PROJECT_MANIFEST_FILENAME), serializeProjectDesign(design), 'utf8');
-      written = true;
-    } catch (e2) {
-      logger.warn('agent', 'design gate: failed to write lia.project.json', {
-        taskId: task.id.slice(0, 8),
-      }, e2 instanceof Error ? e2 : e);
-    }
+    logger.warn('agent', 'design bootstrap: failed to write lia.project.json', {
+      taskId: task.id.slice(0, 8),
+    }, e instanceof Error ? e : undefined);
   }
 
-  logger.info('agent', 'design gate proposed', {
+  logger.info('agent', 'design bootstrap proposed', {
     taskId: task.id.slice(0, 8),
     kind: design.kind,
     preset: design.preset,

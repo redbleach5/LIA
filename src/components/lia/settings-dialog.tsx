@@ -44,6 +44,7 @@ import { KbTab } from './settings/kb-tab';
 import { AboutTab } from './settings/about-tab';
 import type { Settings } from './settings/types';
 import { cueAvatarLook } from '@/lib/avatar-cues';
+import { LIA_APP_EVENTS, onLiaAppEvent } from '@/lib/lia-app-events';
 
 export function SettingsDialog({ initialOpen = false }: { initialOpen?: boolean }) {
   const [open, setOpen] = useState(initialOpen);
@@ -88,14 +89,13 @@ export function SettingsDialog({ initialOpen = false }: { initialOpen?: boolean 
   }, [open]);
 
   // Banner / gear can reopen settings after first mount.
-  // Lazy wrapper only mounts us once; without this, lia-open-settings is a no-op.
+  // Lazy wrapper only mounts us once; without this, openSettings event is a no-op.
   useEffect(() => {
     const openSettings = () => {
       cueAvatarLook('settings', 3);
       setOpen(true);
     };
-    window.addEventListener('lia-open-settings', openSettings);
-    return () => window.removeEventListener('lia-open-settings', openSettings);
+    return onLiaAppEvent(LIA_APP_EVENTS.openSettings, openSettings);
   }, []);
 
   return (

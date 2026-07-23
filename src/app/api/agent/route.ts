@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
   try {
     const parsed = await parseBody(req, createAgentTaskSchema);
     if (!parsed.success) return parsed.response;
-    let { episodeId, goal, autoStart, fsScope, toolsWhitelist, maxSteps, maxDurationSec, template, workspaceMode, confirmSandbox, forceAgent } = parsed.data;
+    let { episodeId, goal, autoStart, fsScope, toolsWhitelist, maxSteps, maxDurationSec, template, workspaceMode, confirmSandbox, forceAgent, applyMode, gitAutoCommit } = parsed.data;
     const userGoal = goal.trim();
 
     // Intent gate: Agent mode is a capability preference, not a forced ReAct loop.
@@ -207,6 +207,10 @@ export async function POST(req: NextRequest) {
       maxSteps: resolvedMaxSteps,
       maxDurationSec: resolvedMaxDurationSec,
     });
+
+    const { setTaskApplyMode, setTaskGitAutoCommit } = await import('@/lib/agent/file-changes');
+    setTaskApplyMode(task.id, applyMode === 'auto' ? 'auto' : 'ask');
+    if (gitAutoCommit) setTaskGitAutoCommit(task.id, true);
 
     // Previous task's serve often keeps :5173 on Windows — clear before new work.
     try {

@@ -20,8 +20,8 @@ import {
 //   2. shouldDeliberate(plan) true (plus moderate) → generateText called,
 //      result injected into system prompt suffix
 //   3. runDeliberate throws → pipeline continues without crash
-//   4. shouldSelfCheck true → runSelfCheck runs after stream; issues → log
-//   5. runSelfCheck parse fail → severity 'ok', no throw
+//   4. streaming self-check stays off (runSelfCheck never called)
+//   5. pipeline unaffected without self-check
 //
 // DoD: ≥5 tests, <5s, covers gating `calls >= 2`.
 
@@ -99,6 +99,7 @@ vi.mock('@/lib/logger', () => ({
 vi.mock('@/lib/ollama', () => ({
   getChatModel: vi.fn(async () => ({ modelId: 'mock-model' })),
   getModelName: vi.fn(async () => 'qwen2.5:7b'),
+  setOllamaNumCtx: vi.fn(),
   getOllamaSettings: vi.fn(async () => ({
     provider: 'ollama',
     baseUrl: 'http://127.0.0.1:11434',
@@ -241,111 +242,84 @@ describe('Phase 6 — cognitive glue runtime (deliberate + self-check wiring)', 
     });
   };
 
-  // ── Scenario 1: shouldDeliberate false → runDeliberate NOT called ──
-  it('standard tier moderate (calls=1, deliberate=false) → runDeliberate not called', async () => {
+  // ── Latency pass: deliberate never called ──
+  it('standard tier moderate → runDeliberate not called', async () => {
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
-    // Moderate (not complex): no "архитектур"/проанализируй stems — single-call path.
     await runChatPipeline({ text: 'Что думаешь про React hooks в целом', episodeId, mode: 'auto' });
 
-    // Standard + moderate: calls=1, deliberate=false → shouldDeliberate returns false.
     expect(runDeliberateMock).not.toHaveBeenCalled();
-    // streamText called once (main response).
     expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
 
-  it('standard tier complex → runDeliberate called (hard work not lobotomized)', async () => {
+  it('standard tier complex → runDeliberate still not called (latency pass)', async () => {
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
     await runChatPipeline({ text: 'Проанализируй архитектуру React подробно', episodeId, mode: 'auto' });
 
-    expect(runDeliberateMock).toHaveBeenCalled();
+    expect(runDeliberateMock).not.toHaveBeenCalled();
     const streamParams = capturedStreamParams.current;
-    expect(streamParams?.system).toEqual(expect.stringContaining('ВНУТРЕННИЙ АНАЛИЗ'));
+    expect(streamParams?.system).not.toEqual(expect.stringContaining('ВНУТРЕННИЙ АНАЛИЗ'));
   });
 
-  // ── Scenario 2: shouldDeliberate true → runDeliberate called, result in system prompt ──
-  it('plus tier → runDeliberate called, analysis injected into system suffix', async () => {
+  it('plus tier → runDeliberate not called, no analysis suffix', async () => {
     usePlusTier();
 
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
     await runChatPipeline({ text: 'Проанализируй архитектуру микросервисов подробно', episodeId, mode: 'auto' });
 
-    // runDeliberate should be called (plus tier + moderate+ complexity).
-    expect(runDeliberateMock).toHaveBeenCalled();
-    // The deliberate analysis text must be injected into the system prompt.
+    expect(runDeliberateMock).not.toHaveBeenCalled();
     const streamParams = capturedStreamParams.current;
-    expect(streamParams?.system).toEqual(expect.stringContaining('ВНУТРЕННИЙ АНАЛИЗ'));
-    expect(streamParams?.system).toEqual(expect.stringContaining('MOCK_DELIBERATE_ANALYSIS'));
+    expect(streamParams?.system).not.toEqual(expect.stringContaining('ВНУТРЕННИЙ АНАЛИЗ'));
+    expect(streamParams?.system).not.toEqual(expect.stringContaining('MOCK_DELIBERATE_ANALYSIS'));
   });
 
-  // ── Scenario 3: runDeliberate throws → pipeline continues without crash ──
-  it('runDeliberate throws → pipeline catches, continues, still returns a stream', async () => {
+  it('plus tier → deliberate unused even if mock would throw; stream still works', async () => {
     usePlusTier();
-    // Make runDeliberate throw (simulates Ollama timeout during deliberate).
     runDeliberateMock.mockRejectedValueOnce(new Error('Ollama timeout'));
 
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
-    // Must NOT throw — deliberate failure is non-fatal.
-    // Use complex stem so plus tier still enables deliberate (not social/simple).
     const result = await runChatPipeline({
       text: 'Проанализируй архитектуру микросервисов подробно',
       episodeId,
       mode: 'auto',
     });
 
-    // Pipeline must NOT crash — it returns a stream (not a NextResponse error).
     const { NextResponse } = await import('next/server');
     expect(result).not.toBeInstanceOf(NextResponse);
 
-    // streamText still called once (main response proceeds without deliberate).
     expect(streamTextMock).toHaveBeenCalledTimes(1);
-    // runDeliberate was called (and threw), but pipeline survived.
-    expect(runDeliberateMock).toHaveBeenCalled();
-    // The deliberate analysis text must NOT be in the system prompt (since it failed).
+    expect(runDeliberateMock).not.toHaveBeenCalled();
     const streamParams = capturedStreamParams.current;
     const system = String(streamParams?.system ?? '');
     expect(system).not.toContain('ВНУТРЕННИЙ АНАЛИЗ');
     expect(system).not.toContain('MOCK_DELIBERATE_ANALYSIS');
   });
 
-  // ── Scenario 4: shouldSelfCheck true → runSelfCheck runs after stream ──
-  it('plus tier → self-check runs after stream with issues when severity != ok', async () => {
+  // ── Streaming self-check is intentionally disabled ──
+  it('plus tier → self-check does NOT run after stream', async () => {
     usePlusTier();
-    // Self-check returns issues.
     runSelfCheckMock.mockResolvedValueOnce({
       issues: ['Ответ слишком длинный'],
       severity: 'minor',
     });
 
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
-    // Use complex stem — plus tier enables selfCheck for complex/research (calls>=2).
     await runChatPipeline({
       text: 'Проанализируй архитектуру микросервисов подробно',
       episodeId,
       mode: 'auto',
     });
 
-    // Wait for onFinish (triggers persistChatTurn → runSelfCheck).
     await onFinishRef.current;
-    // persistChatTurn runs runSelfCheck detached — give it time to resolve.
     await new Promise(r => setTimeout(r, 100));
 
-    // runSelfCheck should have been called (plus tier + selfCheck=true + calls>=2).
-    expect(runSelfCheckMock).toHaveBeenCalled();
-    // Verify it received the expected params.
-    const selfCheckArgs = runSelfCheckMock.mock.calls[0]?.[0] as { userMessage: string; episodeId: string };
-    expect(selfCheckArgs?.episodeId).toBe(episodeId);
+    expect(runSelfCheckMock).not.toHaveBeenCalled();
   });
 
-  // ── Scenario 5: runSelfCheck parse fail → severity 'ok', no throw ──
-  it('self-check returns non-JSON internally → severity ok, pipeline unaffected', async () => {
+  it('pipeline completes without self-check even when mock would return ok', async () => {
     usePlusTier();
-    // Simulate self-check parse failure: runSelfCheck internally catches and
-    // returns { issues: [], severity: 'ok' } when JSON parse fails. We mock
-    // that exact return value to verify the pipeline accepts it gracefully.
     runSelfCheckMock.mockResolvedValueOnce({ issues: [], severity: 'ok' });
 
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
-    // Complex stem → plus tier selfCheck path.
     const result = await runChatPipeline({
       text: 'Проанализируй архитектуру микросервисов подробно',
       episodeId,
@@ -358,7 +332,6 @@ describe('Phase 6 — cognitive glue runtime (deliberate + self-check wiring)', 
     await onFinishRef.current;
     await new Promise(r => setTimeout(r, 100));
 
-    // runSelfCheck called and returned ok without crashing.
-    expect(runSelfCheckMock).toHaveBeenCalled();
+    expect(runSelfCheckMock).not.toHaveBeenCalled();
   });
 });

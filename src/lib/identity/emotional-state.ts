@@ -9,7 +9,7 @@ import 'server-only';
 // отвечай тепло». LLM видела это как команду. Теперь emotion передаётся
 // в inner monologue как факт состояния, и LLM САМА решает как это влияет.
 //
-// EmotionVector остаётся числами (для RL state + decay), но.usage меняется.
+// EmotionVector остаётся числами (для decay / UI), но usage меняется.
 
 import type { EmotionVector } from '@/lib/personality';
 import { dominantEmotion } from '@/lib/emotion';
@@ -33,7 +33,7 @@ export interface EmotionalStateSnapshot {
  * Создать snapshot эмоционального состояния для inner monologue.
  *
  * Возвращает:
- *   - vector: числа для RL state (не меняется)
+ *   - vector: числа для decay / UI (не меняется)
  *   - dominantEmotion: какая эмоция сильнее всего
  *   - intensityLabel: упрощённая метка (low/moderate/high) — НЕ команда, контекст
  *   - description: текст для inner monologue промпта

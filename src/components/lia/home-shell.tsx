@@ -9,6 +9,9 @@ import { SettingsDialogLazy } from '@/components/lia/settings-dialog-lazy';
 import { KbSidebar } from '@/components/lia/kb-sidebar';
 import { ShortcutsHelp } from '@/components/lia/shortcuts-help';
 import { PanelErrorBoundary } from '@/components/lia/panel-error-boundary';
+import { LIA_APP_EVENTS, dispatchLiaAppEvent, onLiaAppEvent } from '@/lib/lia-app-events';
+import { useChatStore } from '@/stores/chat-store';
+import { normalizeChatMode } from '@/lib/chat-modes';
 
 const EpisodesSidebar = dynamic(
   () => import('@/components/lia/episodes-sidebar').then(m => ({ default: m.EpisodesSidebar })),
@@ -167,13 +170,15 @@ export function HomeShell() {
       toggleKb();
     } else if (e.key === 'n' || e.key === 'N') {
       e.preventDefault();
-      window.dispatchEvent(new Event('lia-new-episode'));
+      dispatchLiaAppEvent(LIA_APP_EVENTS.newEpisode);
     } else if (e.key === ',') {
       if (inEditable) return;
       e.preventDefault();
-      window.dispatchEvent(new Event('lia-open-settings'));
+      dispatchLiaAppEvent(LIA_APP_EVENTS.openSettings);
     } else if ((e.key === 'a' || e.key === 'A') && e.shiftKey) {
       if (inEditable) return;
+      // In agent mode Ctrl+Shift+A toggles Apply ask|auto (AgentWorkspaceModeSelector).
+      if (normalizeChatMode(useChatStore.getState().mode) === 'agent') return;
       e.preventDefault();
       cycleAvatarMode();
     }
@@ -186,8 +191,7 @@ export function HomeShell() {
 
   useEffect(() => {
     const openKb = () => setKbOpen(true);
-    window.addEventListener('lia-open-kb', openKb);
-    return () => window.removeEventListener('lia-open-kb', openKb);
+    return onLiaAppEvent(LIA_APP_EVENTS.openKb, openKb);
   }, []);
 
   // Clear legacy focus-mode flag if present
@@ -239,7 +243,6 @@ export function HomeShell() {
           <PanelErrorBoundary fallbackTitle="Чат временно недоступен">
             <ChatPanel
               companionBeside={avatarMode === 'portrait'}
-              showAgentDock={avatarMode !== 'full'}
               onCycleAvatar={cycleAvatarMode}
             />
           </PanelErrorBoundary>

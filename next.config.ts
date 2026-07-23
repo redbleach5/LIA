@@ -11,12 +11,9 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: path.resolve(__dirname),
   serverExternalPackages: [
     'better-sqlite3',
-    'onnxruntime-node',
     'sqlite-vec',
     'pino',
     'pino-pretty',
-    // KB Phase 4: @xenova/transformers uses ONNX runtime + has dynamic imports
-    '@xenova/transformers',
     // KB Phase 7: native/dynamic dependencies
     'pdf-parse',
     'mammoth',

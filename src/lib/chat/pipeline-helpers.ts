@@ -20,7 +20,6 @@ import {
   getEpisodeFacts,
 } from '@/lib/memory/facts';
 import { recall } from '@/lib/memory/vector';
-import { recallEmotionalAnchors } from '@/lib/memory/emotional-memory';
 import { listAgentTasks } from '@/lib/agent/task';
 import { db } from '@/lib/db';
 import { GROUNDING } from '@/lib/prompts/grounding';
@@ -33,7 +32,8 @@ export interface ChatContext {
   episodeFacts: Awaited<ReturnType<typeof getEpisodeFacts>>;
   vectorHits: Awaited<ReturnType<typeof recall>>;
   agentTasks: Awaited<ReturnType<typeof listAgentTasks>>;
-  emotionalRecall: Awaited<ReturnType<typeof recallEmotionalAnchors>>;
+  /** Always empty — emotional anchor record/recall disabled (neuroslope cut). */
+  emotionalRecall: { anchors: []; painfulAnchor: null };
 }
 
 /**
@@ -50,25 +50,24 @@ export async function buildChatContext(params: {
   skipRecall: boolean;
   perceivedEmotion: unknown;  // EmotionVector — typed loosely to avoid import cycle
 }): Promise<ChatContext> {
-  const { episodeId, text, skipRecall, perceivedEmotion } = params;
+  const { episodeId, text, skipRecall } = params;
 
-  const [globalFacts, episodeFacts, vectorHits, agentTasks, emotionalRecall] = await Promise.all([
+  const [globalFacts, episodeFacts, vectorHits, agentTasks] = await Promise.all([
     getAllGlobalFacts(),
     getEpisodeFacts(episodeId),
     skipRecall
       ? Promise.resolve([] as Awaited<ReturnType<typeof recall>>)
       : recall({ episodeId, query: text, limit: 3, minSimilarity: 0.35 }).catch(() => []),
     listAgentTasks(episodeId),
-    skipRecall
-      ? Promise.resolve({ anchors: [], painfulAnchor: null })
-      : recallEmotionalAnchors({
-          episodeId, queryText: text,
-          currentEmotion: perceivedEmotion as Parameters<typeof recallEmotionalAnchors>[0]['currentEmotion'],
-          limit: 3,
-        }).catch(() => ({ anchors: [], painfulAnchor: null })),
   ]);
 
-  return { globalFacts, episodeFacts, vectorHits, agentTasks, emotionalRecall };
+  return {
+    globalFacts,
+    episodeFacts,
+    vectorHits,
+    agentTasks,
+    emotionalRecall: { anchors: [], painfulAnchor: null },
+  };
 }
 
 /**
@@ -193,7 +192,8 @@ export async function runProactiveKbSearch(params: {
   /** Hard-filter KB search to these Source.id (episode workspace pin). */
   pinnedSourceIds?: string[];
 }): Promise<KbSearchResult> {
-  const { text, episodeId, tier, plan, recentMessages, isKbQuestion, log, abortSignal, pinnedSourceIds } = params;
+  const { text, episodeId, tier, complexity, recentMessages, isKbQuestion, log, abortSignal, pinnedSourceIds } = params;
+  void params.plan; // toolsEnabled no longer gates pre-search (latency pass)
 
   const empty: KbSearchResult = {
     kbSearchContext: undefined,
@@ -206,6 +206,16 @@ export async function runProactiveKbSearch(params: {
   // H8 fix: bail out early if user already clicked Stop.
   if (abortSignal?.aborted) return empty;
 
+  // Skip count/embed entirely for pure social / acquaintance / light complexity.
+  const { detectAcquaintanceRequest, isPureSocialMessage } = await import('@/lib/chat/message-heuristics');
+  if (
+    isPureSocialMessage(text)
+    || detectAcquaintanceRequest(text)
+    || complexity === 'trivial'
+  ) {
+    return empty;
+  }
+
   // Check KB source count (with P0-5 fix: try/catch for pre-Phase-1 DBs)
   let readyKbCount = 0;
   try {
@@ -214,6 +224,8 @@ export async function runProactiveKbSearch(params: {
     log.warn('chat', 'KB source table unavailable — skipping KB pre-search', {}, e);
     return empty;
   }
+
+  if (readyKbCount === 0) return empty;
 
   const recentTurns = recentMessages
     .filter(m => m.role === 'user' || m.role === 'companion')
@@ -231,16 +243,17 @@ export async function runProactiveKbSearch(params: {
   } = await import('@/lib/kb/kb-chat-context');
   const threadKb = extractThreadKbContext(recentTurns);
 
-  // KB query rewrite (LLM) — only for plus/max tier.
-  // On standard tier (8B models) the LLM call adds 1-10s latency BEFORE the
-  // main response, blocking the user. The quality gain on 8B is marginal
-  // (rewrite produces a cleaner query, but 8B embed model is already weak —
-  // the cleaner query doesn't help recall much). On plus/max (14B+) the
-  // rewrite pays for itself with better recall.
-  // Sprint 8B-audit (B7).
-  const shouldRewrite = (tier === 'plus' || tier === 'max') && plan.toolsEnabled;
+  // Pre-search gate BEFORE rewrite — avoid LLM rewrite when we won't search.
+  // toolsEnabled gates streamText schemas; pre-search is independent (latency pass).
+  const shouldPreSearchKb = shouldPreSearchKbForChat(text, recentTurns, isKbQuestion);
+  if (!shouldPreSearchKb) {
+    return { ...empty, readyKbCount };
+  }
+
+  // KB query rewrite (LLM) — only for plus/max when we are actually searching.
+  const shouldRewrite = (tier === 'plus' || tier === 'max');
   let kbSearchQuery: string;
-  if (shouldRewrite && readyKbCount > 0) {
+  if (shouldRewrite) {
     const { rewriteKbQuery } = await import('@/lib/kb/kb-query-rewrite');
     const rewritten = await rewriteKbQuery(text, recentTurns);
     kbSearchQuery = buildKbSearchQuery(rewritten, recentTurns);
@@ -256,12 +269,6 @@ export async function runProactiveKbSearch(params: {
   }
 
   const kbExcerptQuery = buildKbExcerptQuery(text, threadKb.identifiers);
-  const shouldPreSearchKb = plan.toolsEnabled && readyKbCount > 0
-    && shouldPreSearchKbForChat(text, recentTurns, isKbQuestion);
-
-  if (!shouldPreSearchKb) {
-    return { ...empty, readyKbCount };
-  }
 
   try {
     const { searchKB } = await import('@/lib/kb/search');

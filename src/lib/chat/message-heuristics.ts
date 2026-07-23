@@ -1,4 +1,8 @@
 // Heuristics for greeting / acquaintance — shared by pipeline and tests.
+//
+// Pure-social gate: partial matches («привет» / «как ты» inside a longer ask)
+// must NOT flip trivial flags. Only messages that are entirely social after
+// stripping the social shell may take the short greeting / how-are-you path.
 
 export type TrivialMessageFlags = {
   isTrivialGreeting: boolean;
@@ -12,9 +16,40 @@ const GREETING_RE =
 const HOW_ARE_YOU_RE =
   /(?<![\p{L}\p{N}])(как дела|как ты|что делаешь|как настроение|чем занимаешься)(?![\p{L}\p{N}])/iu;
 
-/** «Давай знакомиться», представиться, спросить имя — не сжимать до «короткое привет». */
+/** Tokens removed when checking whether anything non-social remains. */
+const SOCIAL_SHELL_RE =
+  /(?<![\p{L}\p{N}])(?:привет(?:ик)?|здравствуй(?:те)?|хай|hi|hello|hey|ку|даров|доброе утро|добрый вечер|добрый день|пока|до свидания|bye|goodbye|увидимся|спасибо|благодарю|thanks|thank you|спс|ок|окей|хорошо|ладно|да|нет|угу|ага|как дела|как ты|что делаешь|как настроение|чем занимаешься)(?![\p{L}\p{N}])/giu;
+
+const PUNCT_EMOJI_WS_RE =
+  /[\s.,!?;:…—–\-'"«»()[\]{}]+|\p{Extended_Pictographic}|\uFE0F|\u200D/gu;
+
+/** «Давай знакомиться», «кто ты», представиться — soft signal for monologue / hints. */
 const ACQUAINTANCE_RE =
-  /(?<![\p{L}\p{N}])(?:знаком\p{L}*|представ\p{L}*|как\s+(?:тебя|меня)\s+зовут|who are you|what'?s your name)/iu;
+  /(?<![\p{L}\p{N}])(?:знаком\p{L}*|представ\p{L}*|кто\s+ты|расскажи\s+(?:немного\s+)?о\s+себе|как\s+(?:тебя|меня)\s+зовут|who are you|what'?s your name)/iu;
+
+/**
+ * Strip greeting / how-are-you / thanks / ack tokens plus punctuation & emoji.
+ * What remains is the substantive residual (if any).
+ */
+export function stripSocialShell(text: string): string {
+  return text
+    .replace(SOCIAL_SHELL_RE, ' ')
+    .replace(PUNCT_EMOJI_WS_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Residual letters/digits after social-shell strip (for tests / logs). */
+export function residualAfterSocialShell(text: string): string {
+  return stripSocialShell(text);
+}
+
+/** True when the message is only greeting / how-are-you / thanks / ack. */
+export function isPureSocialMessage(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  return residualAfterSocialShell(trimmed).length === 0;
+}
 
 export function detectAcquaintanceRequest(text: string): boolean {
   return ACQUAINTANCE_RE.test(text.toLowerCase().trim());
@@ -23,12 +58,11 @@ export function detectAcquaintanceRequest(text: string): boolean {
 export function detectTrivialMessageFlags(text: string): TrivialMessageFlags {
   const textLower = text.toLowerCase().trim();
   const isAcquaintanceRequest = detectAcquaintanceRequest(text);
+  const pure = isPureSocialMessage(text);
 
-  const isTrivialGreeting = !isAcquaintanceRequest
-    && text.length < 50
-    && GREETING_RE.test(textLower);
-
-  const isTrivialHowAreYou = text.length < 60 && HOW_ARE_YOU_RE.test(textLower);
+  // Trivial greeting / how-are-you only when NOTHING non-social remains.
+  const isTrivialGreeting = pure && GREETING_RE.test(textLower);
+  const isTrivialHowAreYou = pure && HOW_ARE_YOU_RE.test(textLower);
 
   return { isTrivialGreeting, isTrivialHowAreYou, isAcquaintanceRequest };
 }

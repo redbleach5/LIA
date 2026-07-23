@@ -20,7 +20,7 @@ import { useChatStore } from '@/stores/chat-store';
 import { cn } from '@/lib/utils';
 
 // ============================================================================
-// Цвета фаз — должны совпадать с PHASES в agent-thought-bubble.tsx
+// Цвета фаз агента (совпадают с status parts в bubble)
 // ============================================================================
 const PHASE_COLORS: Record<string, { stroke: string; glow: string }> = {
   planning:     { stroke: '#f59e0b', glow: 'rgba(245, 158, 11, 0.4)' },  // amber

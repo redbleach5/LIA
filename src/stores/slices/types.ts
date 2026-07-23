@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { LIA_PERSONALITY, type EmotionVector } from '@/lib/personality';
+import type { MessagePart, PartsReduceState } from '@/lib/agent/message-parts';
 
 export type ChatMessage = {
   id: string;
@@ -12,7 +13,17 @@ export type ChatMessage = {
   emotion?: EmotionVector;
   createdAt: number;
   streaming?: boolean;
+  /** Agent turn: inline parts are the UI source of truth. */
+  parts?: MessagePart[];
+  /** Links message to AgentTask for SSE → parts reducer. */
+  agentTaskId?: string;
+  /** Opaque reducer bookkeeping (seen ids / metrics) — not persisted. */
+  partsState?: PartsReduceState;
 };
+
+/** Episode sticky: ask before write vs auto-apply. */
+export type AgentApplyMode = 'ask' | 'auto';
+
 
 export type ChatAttachmentMeta = {
   id: string;

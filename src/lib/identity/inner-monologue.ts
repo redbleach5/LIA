@@ -132,30 +132,12 @@ const INNER_MONOLOGUE_TIMEOUT_MS = (() => {
   return Number.isFinite(raw) && raw > 0 ? raw : 60_000;
 })();
 
-/** Perceive triggers that warrant full monologue on standard (affective, not task). */
-const STANDARD_MONOLOGUE_TRIGGERS = new Set([
-  'sadTopic',
-  'rudeness',
-  'disagreement',
-  'warmth',
-]);
-
 /**
- * Should Lia pay for a full inner-monologue LLM call?
- *
- * Pure routing — does not invent tone/prompts. Same decideHowToRespond path
- * when true; createFallbackDecision when false.
- *
- * Policy (P1b / PRIORITIES):
- *   - micro: never (budget)
- *   - trivial greeting / how-are-you short-circuit: never
- *   - trivial intent (thanks / ack / joke): never — fallback tree is enough
- *   - agent mode: never (task path)
- *   - plus/max: always otherwise
- *   - standard: companion-critical only (emotional/urgent intent OR strong
- *     affective perceive triggers) — keep latency low on instruction/learning
+ * Chat latency pass: inner monologue LLM pre-call is always off.
+ * Tone/action come from createFallbackDecision + character in system prompt.
+ * Params kept for call-site / test compatibility.
  */
-export function shouldRunInnerMonologue(params: {
+export function shouldRunInnerMonologue(_params: {
   tier: string;
   intent: LiaIntent;
   isTrivialGreeting: boolean;
@@ -166,30 +148,7 @@ export function shouldRunInnerMonologue(params: {
   /** Getting to know user / name unknown */
   isAcquaintanceRequest?: boolean;
 }): boolean {
-  const {
-    tier,
-    intent,
-    isTrivialGreeting,
-    isTrivialHowAreYou,
-    isAgent = false,
-    emotionTriggers = [],
-    isAcquaintanceRequest = false,
-  } = params;
-
-  if (isTrivialGreeting || isTrivialHowAreYou) return false;
-  if (intent === 'trivial') return false;
-  if (isAgent) return false;
-  if (tier === 'micro') return false;
-  if (isAcquaintanceRequest) return true;
-  if (tier === 'plus' || tier === 'max') return true;
-
-  if (tier === 'standard') {
-    if (intent === 'emotional' || intent === 'urgent') return true;
-    return emotionTriggers.some(t => STANDARD_MONOLOGUE_TRIGGERS.has(t));
-  }
-
-  // Unknown tier — prefer full path (do not silently dumb down)
-  return true;
+  return false;
 }
 
 /**

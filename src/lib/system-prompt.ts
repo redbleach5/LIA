@@ -17,7 +17,6 @@ import type { LiaDecision } from './identity/decision';
 import { LIA_ACTION_LABELS, LIA_EMOTION_LABELS, LIA_TONE_LABELS } from './identity/decision';
 import { generateChatSelfAwareness } from './identity/self-awareness';
 import type { PainfulAnchorSignal } from './prompts/emotional-signals';
-import { formatPainfulAnchorForPrompt } from './prompts/emotional-signals';
 import {
   STATIC_CORE,
   PLAYBOOK_TOOLS,
@@ -291,7 +290,7 @@ export function buildSystemPromptFootprint(ctx: SystemPromptContext): SystemProm
 
   const playbooks = buildPlaybooksForProfile(profile, playbookFlags);
 
-  const staticPrefix = `${STATIC_CORE}\n\n${getCharacterSummary()}${playbooks}`;
+  const staticPrefix = `${getCharacterSummary()}\n\n${STATIC_CORE}${playbooks}`;
 
   const stableParts: string[] = [];
   const volatileParts: string[] = [];
@@ -326,10 +325,9 @@ export function buildSystemPromptFootprint(ctx: SystemPromptContext): SystemProm
   if (ctx.episodeSummary) {
     stableParts.push(`\nКраткое саммари предыдущей части диалога (для контекста, не упоминай явно):\n${ctx.episodeSummary}`);
   }
-  if (ctx.emotionalAnchors && includeCtx(isEmotional && profile !== 'minimal')) {
-    stableParts.push(`\nЭмоциональные воспоминания из этого чата (как пользователь чувствовал себя в похожих ситуациях раньше):\n${ctx.emotionalAnchors}`);
-    stableParts.push('\nИспользуй эти воспоминания мягко — не упоминай их прямо, если пользователь сам не поднимает тему. Но учитывай их в тоне: если раньше пользователь был раздражён в похожей ситуации, будь аккуратнее.');
-  }
+  // Emotional anchors / painful_anchor: still recalled & recorded in DB, but not
+  // injected into the prompt (soft "учитывай тон" / machine telemetry theater).
+
   if (ctx.openTasks && includeCtx(isAgent || isCodeTask)) {
     stableParts.push(`\nАктивные агентские задачи в этом чате:\n${ctx.openTasks}`);
   }
@@ -375,16 +373,15 @@ export function buildSystemPromptFootprint(ctx: SystemPromptContext): SystemProm
         '\nСейчас короткая реплика (привет / как дела): ответь тепло и очень кратко, без перечисления инструментов и возможностей. Не начинай каждое следующее сообщение снова с «Привет».',
       );
     }
-  } else if (ctx.isAcquaintanceRequest && !ctx.userNameKnown) {
+  } else {
+    // Non-trivial: never inject an answer agenda (ask-name / self-intro) over the user ask.
     volatileParts.push(
-      '\nСобеседник хочет познакомиться, имя пока неизвестно: коротко ответь и задай ровно один вопрос — как зовут. Без второго вопроса и без списка инструментов. Не начинай с отдельного «Привет», если уже здоровались.',
+      '\nСначала ответь на сообщение пользователя по существу. '
+      + 'Имя или самопрезентацию — только если уместно и не вместо ответа.',
     );
-  } else if (!ctx.userNameKnown && (ctx.episodeUserTurnCount ?? 0) <= 4 && !ctx.isAcquaintanceRequest) {
-    volatileParts.push(
-      '\nИмя собеседника неизвестно. Если в этом чате ещё не спрашивала — можно ровно один короткий вопрос, как зовут; не добавляй другие вопросы в ту же реплику.',
-    );
-  } else if (profile === 'companion') {
-    volatileParts.push('\nРежим собеседника: без списка инструментов и «я умею всё». Просто живой ответ.');
+    if (profile === 'companion') {
+      volatileParts.push('Режим собеседника: без списка инструментов и «я умею всё». Просто живой ответ.');
+    }
   }
 
   // Ongoing chat: always reinforce no-hello-loop (models love opening with «Привет»).
@@ -406,7 +403,7 @@ export function buildSystemPromptFootprint(ctx: SystemPromptContext): SystemProm
     volatileParts.push(`\nТы решила как ответить:
 - Действие: ${LIA_ACTION_LABELS[d.action] ?? d.action}
 - Тон: ${LIA_TONE_LABELS[d.desiredTone] ?? d.desiredTone}
-- Желание помочь: ${(d.willingnessToHelp * 100).toFixed(0)}% — отвечай ${willingnessDesc}
+- Желание помочь: отвечай ${willingnessDesc}
 - Эмоциональная окраска: ${LIA_EMOTION_LABELS[d.emotionalExpression] ?? d.emotionalExpression}
 ${why ? `- Внутренняя опора: ${why}` : ''}
 - Как это звучит: ${presence}
@@ -414,10 +411,6 @@ ${why ? `- Внутренняя опора: ${why}` : ''}
 Это твоё решение, исходящее из твоего характера и состояния. Ответь естественно, исходя из него. Не «играй» этот тон — будь им.`);
   } else {
     volatileParts.push(`\nСейчас ты чувствуешь: ${emotionToText(ctx.emotion)}.`);
-  }
-
-  if (ctx.painfulAnchor) {
-    volatileParts.push(`\n⚠ ${formatPainfulAnchorForPrompt(ctx.painfulAnchor)}`);
   }
 
   const prompt = staticPrefix + '\n' + stableParts.join('\n') + '\n' + volatileParts.join('\n');

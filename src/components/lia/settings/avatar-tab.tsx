@@ -22,6 +22,7 @@ import {
 } from '@/lib/avatar-config';
 import type { Settings } from './types';
 import { ThemePicker } from '../theme-picker';
+import { LIA_APP_EVENTS, dispatchLiaAppEvent } from '@/lib/lia-app-events';
 
 type AvatarTabProps = {
   settings: Settings;
@@ -81,7 +82,7 @@ export function AvatarTab({
       setAvatarConfig(config);
       toast.success('Настройки внешнего вида сохранены');
       await onSaved();
-      window.dispatchEvent(new CustomEvent('lia-settings-changed'));
+      dispatchLiaAppEvent(LIA_APP_EVENTS.settingsChanged);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`Не удалось сохранить: ${msg}`);
@@ -120,7 +121,7 @@ export function AvatarTab({
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       toast.success(`Модель загружена: ${data.filename}`);
       await onUploadComplete();
-      window.dispatchEvent(new CustomEvent('lia-settings-changed'));
+      dispatchLiaAppEvent(LIA_APP_EVENTS.settingsChanged);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Загрузка не удалась');
     } finally {
@@ -135,7 +136,7 @@ export function AvatarTab({
       if (!res.ok) throw new Error(data.error || 'Download failed');
       toast.success(data.alreadyExisted ? 'Образ уже был готов' : 'Образ Лии готов');
       await onUploadComplete();
-      window.dispatchEvent(new CustomEvent('lia-settings-changed'));
+      dispatchLiaAppEvent(LIA_APP_EVENTS.settingsChanged);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Не удалось загрузить образ');
     }

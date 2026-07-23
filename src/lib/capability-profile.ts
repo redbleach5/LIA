@@ -2,32 +2,17 @@
 //
 // Tier system (4 levels):
 //   micro    — ≤4B parameters, or CPU-only, or <8GB VRAM
-//              Strategy: 1 LLM call + heavy tool use (web_search compensates
-//              for model weakness). Self-check OFF.
-//
-//   standard — 5-13B parameters, 8-24GB VRAM
-//              Strategy: 1 call on easy traffic; deliberate + self-check on
-//              complex/research. Agent: maxSteps 25, maxDuration 1 hour.
-//
-//   plus     — 14-32B parameters, 24-80GB VRAM (single GPU 4090/5090 territory)
-//              Strategy: 2-4 LLM calls with deliberate + self-check on complex tasks.
-//              Agent: maxSteps up to 100, maxDuration up to 6 hours.
-//
+//   standard — 5-13B parameters, 8-24GB VRAM (deliberate on complex/research)
+//   plus     — 14-32B parameters, 24-80GB VRAM
 //   max      — 33B+ parameters, multi-GPU or 80GB+ VRAM
-//              Strategy: full deliberate loop, no hard limits.
-//              Agent: maxSteps up to 500, maxDuration up to 24 hours.
 //
 // Profile is cached in DB (Setting table) with 1-hour TTL.
-// Refreshed when: user changes model (settings POST), or via /api/capability/refresh.
-//
-// P1 budget contract: roles chat/agent/secondary/embed + VRAM pool → headroom
-// → effective context / agent budgets. Pure math in compute-budget.ts.
+// VRAM pressure is observe/warn only — never shrinks context or cognitive budgets.
+// Depth flags (deliberate) live in cognitive-depth.ts EXECUTION_MATRIX.
 
 import { db } from '@/lib/db';
 import { checkOllamaHealth } from '@/lib/ollama';
 import {
-  applyHeadroomToCognitiveParams,
-  applyHeadroomToContextWindow,
   classifyTierFromBudget,
   estimateModelVramGb,
   resolveComputeBudget,
@@ -602,11 +587,8 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
   });
 
   const modelContextWindow = chatDetails.contextWindow;
-  // Observe-only: do not shrink context under VRAM pressure
-  const effectiveContextWindow = applyHeadroomToContextWindow(
-    modelContextWindow,
-    budget.pressure,
-  );
+  // VRAM pressure is observe/warn only — never shrink context under pressure.
+  const effectiveContextWindow = modelContextWindow > 0 ? modelContextWindow : 0;
 
   const budgetSnapshot: CapabilityBudgetSnapshot = {
     residentVramGb: budget.residentVramGb,
@@ -691,10 +673,10 @@ const TIER_PARAMS: Record<Tier, CognitiveParams> = {
   },
   standard: {
     calls: 2,
-    // Matrix enables deliberate/selfCheck for complex+research only
+    // Matrix enables deliberate for complex+research only
     // (latency tradeoff on trivial/simple/moderate — see cognitive-depth.ts).
     deliberate: true,
-    selfCheck: true,
+    selfCheck: false, // streaming cannot revise; see shouldSelfCheck
     maxTokens: 4096,
     toolsEnabled: true,
     autoWebSearch: true,
@@ -704,7 +686,7 @@ const TIER_PARAMS: Record<Tier, CognitiveParams> = {
   plus: {
     calls: 3,
     deliberate: true,       // analyze before respond on complex tasks
-    selfCheck: true,
+    selfCheck: false,
     maxTokens: 8192,
     toolsEnabled: true,
     autoWebSearch: false,   // 30B+ model knows enough
@@ -714,7 +696,7 @@ const TIER_PARAMS: Record<Tier, CognitiveParams> = {
   max: {
     calls: 4,
     deliberate: true,
-    selfCheck: true,
+    selfCheck: false,
     maxTokens: 16384,       // no practical limit
     toolsEnabled: true,
     autoWebSearch: false,
@@ -734,9 +716,8 @@ const TIER_PARAMS: Record<Tier, CognitiveParams> = {
 export async function getCognitiveParams(): Promise<{ profile: CapabilityProfile | null; params: CognitiveParams }> {
   const profile = await getCapabilityProfile();
   const tier = profile?.tier ?? 'standard';
-  const base = TIER_PARAMS[tier];
-  const pressure = profile?.budget?.pressure ?? 'comfortable';
-  const params = applyHeadroomToCognitiveParams(base, pressure);
+  // VRAM pressure is observe/warn only — full tier budgets always.
+  const params = TIER_PARAMS[tier];
   return { profile, params };
 }
 
@@ -751,9 +732,7 @@ export async function getAgentCognitiveParams(): Promise<{
 }> {
   const profile = await getCapabilityProfile();
   const agentTier = resolveAgentTier(profile);
-  const base = TIER_PARAMS[agentTier];
-  const pressure = profile?.budget?.pressure ?? 'comfortable';
-  const params = applyHeadroomToCognitiveParams(base, pressure);
+  const params = TIER_PARAMS[agentTier];
   return { profile, params, agentTier };
 }
 

@@ -21,7 +21,11 @@ export type ChatProfileInput = {
  * - assistant: facts, KB, web, code, agent — full playbooks when adaptive/full
  */
 export function resolveChatPromptProfile(input: ChatProfileInput): ChatPromptProfile {
-  if (!input.toolsEnabled) return 'minimal';
+  // Prefer companion for light chat even when toolsSupported — playbooks stay off.
+  // Only force minimal when the model literally cannot use tools AND we disabled them.
+  const lightComplexity = input.complexity === 'trivial'
+    || input.complexity === 'simple'
+    || input.isTrivial;
 
   const needsAssistant = input.isAgent
     || input.hasKbContext
@@ -32,8 +36,11 @@ export function resolveChatPromptProfile(input: ChatProfileInput): ChatPromptPro
     || input.complexity === 'research'
     || input.complexity === 'moderate';
 
-  if (needsAssistant) return 'assistant';
-  if (input.isTrivial) return 'companion';
+  if (needsAssistant) {
+    return input.toolsEnabled ? 'assistant' : 'minimal';
+  }
+
+  if (!input.toolsEnabled && !lightComplexity) return 'minimal';
 
   return 'companion';
 }

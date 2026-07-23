@@ -81,6 +81,7 @@ vi.mock('@/lib/logger', () => ({
 vi.mock('@/lib/ollama', () => ({
   getChatModel: vi.fn(async () => ({ modelId: 'mock-model' })),
   getModelName: vi.fn(async () => 'qwen2.5:7b'),
+  setOllamaNumCtx: vi.fn(),
   getOllamaSettings: vi.fn(async () => ({
     provider: 'ollama',
     baseUrl: 'http://127.0.0.1:11434',
@@ -331,15 +332,28 @@ describe('runChatPipeline (core contracts)', () => {
     expect((params?.abortSignal as AbortSignal).aborted).toBe(true);
   });
 
-  it('enables tools for normal questions without proactive RAG', async () => {
+  it('enables tools for moderate+ questions without proactive RAG', async () => {
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
+    // "проанализируй" → complex → toolsEnabled on plan
     await runChatPipeline({
-      text: 'Объясни разницу между let и const в JavaScript',
+      text: 'Проанализируй плюсы и минусы let и const в JavaScript подробно',
       episodeId,
       mode: 'auto',
     });
 
     const params = capturedStreamParams.current;
     expect(params?.tools).toBeDefined();
+  });
+
+  it('disables tools on simple social/acquaintance (latency pass)', async () => {
+    const { runChatPipeline } = await import('@/lib/chat/pipeline');
+    await runChatPipeline({
+      text: 'Привет. Кто ты?',
+      episodeId,
+      mode: 'auto',
+    });
+
+    const params = capturedStreamParams.current;
+    expect(params?.tools).toBeUndefined();
   });
 });

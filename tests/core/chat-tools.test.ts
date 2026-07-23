@@ -39,4 +39,18 @@ describe('decideChatTools', () => {
       kbAnswerLocked: true,
     })).toBe(false);
   });
+
+  it('disables tools on trivial/simple complexity (latency pass)', () => {
+    expect(decideChatTools({ ...base, complexity: 'trivial' })).toBe(false);
+    expect(decideChatTools({ ...base, complexity: 'simple' })).toBe(false);
+  });
+
+  it('disables tools for companion/minimal profile', () => {
+    expect(decideChatTools({ ...base, complexity: 'moderate', chatProfile: 'companion' })).toBe(false);
+    expect(decideChatTools({ ...base, complexity: 'moderate', chatProfile: 'minimal' })).toBe(false);
+  });
+
+  it('enables tools on moderate without lock', () => {
+    expect(decideChatTools({ ...base, complexity: 'moderate' })).toBe(true);
+  });
 });

@@ -25,8 +25,6 @@ import {
   resolveDecayBaseline,
 } from '@/lib/emotion';
 import type { EmotionVector } from '@/lib/personality';
-import { formatEmotionalAnchorsForPrompt } from '@/lib/memory/emotional-memory';
-import { decideHowToRespond } from '@/lib/identity/inner-monologue';
 import type { LiaDecision } from '@/lib/identity/decision';
 import type { LiaIntent } from '@/lib/identity/inner-monologue';
 import { isKbQuestion, needsProactiveWebSearch, type TaskComplexity } from '@/lib/task-complexity';
@@ -159,89 +157,45 @@ export async function resolveLiaDecision(params: {
   trivialFlags: TrivialMessageFlags;
   /** From perceive() — affective cues for standard-tier monologue routing */
   emotionTriggers?: readonly string[];
+  /** When true, skip LLM monologue (e.g. deliberate pre-call will run instead). */
+  forceSkipMonologue?: boolean;
   log: RunnerLogger;
 }): Promise<LiaDecisionResult> {
   const {
     text, tier, userMode, perceivedEmotion, recentMessages, trivialFlags, log,
     emotionTriggers = [],
+    forceSkipMonologue = false,
   } = params;
   const { isTrivialGreeting, isTrivialHowAreYou } = trivialFlags;
+  void forceSkipMonologue;
+  void emotionTriggers;
+  void recentMessages;
 
-  const recentTurnsForMonologue = recentMessages
-    .filter(m => m.role === 'user' || m.role === 'companion')
-    .slice(-5)
-    .map(m => ({ role: m.role, content: m.content }));
-
-  const { classifyIntent, shouldRunInnerMonologue } = await import('@/lib/identity/inner-monologue');
+  const { classifyIntent } = await import('@/lib/identity/inner-monologue');
   const liaIntentEarly = classifyIntent(text);
-  const runMonologue = shouldRunInnerMonologue({
-    tier,
-    intent: liaIntentEarly,
-    isTrivialGreeting,
-    isTrivialHowAreYou,
+  // Latency pass: never pay for monologue LLM — fallback decision only.
+  const shouldSkipMonologue = true;
+
+  const { createEmotionalStateSnapshot } = await import('@/lib/identity/emotional-state');
+  const { createFallbackDecision } = await import('@/lib/identity/decision');
+  const liaIntent: LiaIntent = (isTrivialGreeting || isTrivialHowAreYou) ? 'trivial' : liaIntentEarly;
+  const emotionalState = createEmotionalStateSnapshot(perceivedEmotion);
+  const liaDecision = createFallbackDecision({
+    emotionalState: {
+      dominantEmotion: emotionalState.dominantEmotion,
+      intensityLabel: emotionalState.intensityLabel,
+    },
+    intent: liaIntent,
+    isKbQuestion: isKbQuestion(text),
     isAgent: userMode === 'agent',
-    emotionTriggers,
-    isAcquaintanceRequest: trivialFlags.isAcquaintanceRequest,
+    userMessage: text,
   });
-  const shouldSkipMonologue = !runMonologue;
-
-  let liaDecision: LiaDecision;
-  let liaIntent: LiaIntent;
-
-  if (shouldSkipMonologue) {
-    const { createEmotionalStateSnapshot } = await import('@/lib/identity/emotional-state');
-    const { createFallbackDecision } = await import('@/lib/identity/decision');
-    // Greeting / how-are-you: не оставляем classifyIntent('как…')→learning
-    liaIntent = (isTrivialGreeting || isTrivialHowAreYou) ? 'trivial' : liaIntentEarly;
-    const emotionalState = createEmotionalStateSnapshot(perceivedEmotion);
-    liaDecision = createFallbackDecision({
-      emotionalState: {
-        dominantEmotion: emotionalState.dominantEmotion,
-        intensityLabel: emotionalState.intensityLabel,
-      },
-      intent: liaIntent,
-      isKbQuestion: isKbQuestion(text),
-      isAgent: userMode === 'agent',
-      userMessage: text,
-    });
-    log.debug('chat', 'Lia decision (skipped monologue)', {
-      action: liaDecision.action,
-      tone: liaDecision.desiredTone,
-      intent: liaIntent,
-      tier,
-      reason: isTrivialGreeting
-        ? 'greeting'
-        : isTrivialHowAreYou
-          ? 'howareyou'
-          : tier === 'micro'
-            ? 'micro-tier'
-            : userMode === 'agent'
-              ? 'agent-mode'
-              : 'standard-non-companion',
-    });
-  } else {
-    const liaDecisionResult = await decideHowToRespond({
-      userMessage: text,
-      emotion: perceivedEmotion,
-      recentTurns: recentTurnsForMonologue,
-      tier,
-      isKbQuestion: isKbQuestion(text),
-      isAgent: userMode === 'agent',
-    });
-    liaDecision = liaDecisionResult.decision;
-    liaIntent = liaDecisionResult.intent;
-    log.info('chat', 'Lia decision', {
-      action: liaDecision.action,
-      tone: liaDecision.desiredTone,
-      willingness: liaDecision.willingnessToHelp.toFixed(2),
-      emotion: liaDecision.emotionalExpression,
-      intent: liaIntent,
-      confidence: liaDecision.confidence.toFixed(2),
-      motivation: liaDecision.motivation,
-      tier,
-      routedMonologue: true,
-    });
-  }
+  log.debug('chat', 'Lia decision (fallback only — monologue off)', {
+    action: liaDecision.action,
+    tone: liaDecision.desiredTone,
+    intent: liaIntent,
+    tier,
+  });
 
   return { liaDecision, liaIntent, shouldSkipMonologue };
 }
@@ -338,12 +292,17 @@ export async function buildChatPromptBundle(params: {
     finalUserMessage,
   } = params;
 
-  const skipRecall = (trivialFlags.isTrivialGreeting || trivialFlags.isTrivialHowAreYou)
-    && !trivialFlags.isAcquaintanceRequest;
+  // Skip vector embed on light turns (trivial/simple/pure-social/acquaintance).
+  // Embed swap alone can cost 2–5s before first token.
+  const skipRecall = complexity === 'trivial'
+    || complexity === 'simple'
+    || trivialFlags.isTrivialGreeting
+    || trivialFlags.isTrivialHowAreYou
+    || trivialFlags.isAcquaintanceRequest;
   const chatContext = await buildChatContext({
     episodeId, text, skipRecall, perceivedEmotion,
   });
-  const { globalFacts, episodeFacts, vectorHits, agentTasks, emotionalRecall } = chatContext;
+  const { globalFacts, episodeFacts, vectorHits, agentTasks } = chatContext;
 
   const { getEpisodeWorkspace, pinnedSourceIds: resolvePins, formatWorkspaceForPrompt } =
     await import('@/lib/agent/workspace-binding');
@@ -365,21 +324,23 @@ export async function buildChatPromptBundle(params: {
     ? recentLiaMessages.map((m, i) => `${i + 1}. ${m}`).join('\n')
     : undefined;
 
-  const shouldPreSearch = needsProactiveWebSearch(text, complexity) && plan.toolsEnabled;
-  const webSearchContext = await runProactiveWebSearch({ text, shouldPreSearch, log, abortSignal });
-
-  const kbResult = await runProactiveKbSearch({
-    text,
-    episodeId,
-    tier,
-    plan,
-    complexity,
-    recentMessages,
-    isKbQuestion,
-    log,
-    abortSignal,
-    pinnedSourceIds,
-  });
+  // Pre-search independent of streamText tool schemas (tools off on light turns).
+  const shouldPreSearch = needsProactiveWebSearch(text, complexity);
+  const [webSearchContext, kbResult] = await Promise.all([
+    runProactiveWebSearch({ text, shouldPreSearch, log, abortSignal }),
+    runProactiveKbSearch({
+      text,
+      episodeId,
+      tier,
+      plan,
+      complexity,
+      recentMessages,
+      isKbQuestion,
+      log,
+      abortSignal,
+      pinnedSourceIds,
+    }),
+  ]);
   const { kbSearchContext, kbAnswerLocked } = kbResult;
 
   const { getModelName } = await import('@/lib/ollama');
@@ -394,6 +355,7 @@ export async function buildChatPromptBundle(params: {
     toolsSupported: modelSupportsTools,
     kbAnswerLocked,
     webSearchContext,
+    complexity,
   });
 
   const userNameKnown = !!getUserNameFromFacts(globalFacts);
@@ -429,8 +391,8 @@ export async function buildChatPromptBundle(params: {
     mode: userMode,
     tier,
     complexity,
-    emotionalAnchors: formatEmotionalAnchorsForPrompt(emotionalRecall.anchors) || undefined,
-    painfulAnchor: emotionalRecall.painfulAnchor || undefined,
+    emotionalAnchors: undefined,
+    painfulAnchor: undefined,
     webSearchContext,
     kbSearchContext,
     episodeSummary: formatEpisodeSummaryForPrompt(episode.summary) || undefined,

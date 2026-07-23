@@ -44,7 +44,7 @@ export const AGENT_TEMPLATES: Record<AgentTemplateName, AgentTemplate> = {
 - Цитируй конкретные факты, не обобщай
 - Если информация противоречивая — укажи оба источника
 - НЕ пиши код — только исследуй и сообщай`,
-    toolWhitelist: ['web_search', 'fetch_page', 'http_request', 'save_artifact', 'read_file', 'list_tree', 'file_search', 'grep', 'search_codebase', 'list_codebase_symbols', 'search_sources', 'get_source', 'list_sources'],
+    toolWhitelist: ['web_search', 'fetch_page', 'save_artifact', 'read_file', 'list_tree', 'file_search', 'grep', 'search_codebase', 'list_codebase_symbols', 'search_sources', 'get_source', 'list_sources'],
     maxSteps: 10,
     maxDurationSec: 300,
   },

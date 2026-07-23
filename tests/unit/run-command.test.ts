@@ -24,6 +24,11 @@ describe('run_command validation', () => {
     expect(validateRunCommand('..\\git', ['status']).ok).toBe(false);
   });
 
+  it('blocks shell metacharacters and npm -- forwarding', () => {
+    expect(validateRunCommand('bun', ['test', '&&', 'rm', '-rf', '/']).ok).toBe(false);
+    expect(validateRunCommand('npm', ['run', 'build', '--', '--evil']).ok).toBe(false);
+  });
+
   it('blocks dangerous git verbs/flags', () => {
     expect(validateRunCommand('git', ['clean', '-fd']).ok).toBe(false);
     expect(validateRunCommand('git', ['push', '--force', 'origin', 'main']).ok).toBe(false);
@@ -55,8 +60,10 @@ describe('run_command validation', () => {
     const { mkdtemp, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
+    const { setTaskApplyMode } = await import('@/lib/agent/file-changes');
     const dir = await mkdtemp(join(tmpdir(), 'lia-run-cmd-'));
     try {
+      setTaskApplyMode('t', 'auto');
       const { makeRunCommandTool } = await import('@/lib/agent/tools/run-command');
       const t = makeRunCommandTool({ id: 't', fsScope: dir } as any);
       const result = await t.execute!(

@@ -166,19 +166,33 @@ export function estimateTokens(text: string): number {
 // ============================================================================
 
 /**
+ * Cap inference / dialogue context per tier so advertised 128k–262k windows
+ * do not inflate Ollama KV (TTFT) on a single-user box.
+ */
+const TIER_INFERENCE_CTX_CAP: Record<Tier, number> = {
+  micro: 8192,
+  standard: 32768,
+  plus: 65536,
+  max: 65536,
+};
+
+/**
  * Resolve the effective context window.
  *
  * If the model reported a real context window (Ollama `/api/show`), use it.
- * Otherwise fall back to a tier-based default.
- *
- * We also cap at 128k — beyond that, the O(n) walk + token estimation cost
- * dominates and there's no quality benefit for a single-user app.
+ * Otherwise fall back to a tier-based default. Always capped per tier for latency.
  */
 export function resolveContextWindow(contextWindow: number, tier: Tier): number {
+  const tierCap = TIER_INFERENCE_CTX_CAP[tier];
   if (contextWindow > 0) {
-    return Math.min(contextWindow, 131072);
+    return Math.min(contextWindow, tierCap);
   }
-  return FALLBACK_CONTEXT_WINDOW[tier];
+  return Math.min(FALLBACK_CONTEXT_WINDOW[tier], tierCap);
+}
+
+/** Explicit num_ctx to send to Ollama — aligned with dialogue budget. */
+export function resolveInferenceNumCtx(contextWindow: number, tier: Tier): number {
+  return resolveContextWindow(contextWindow, tier);
 }
 
 /**

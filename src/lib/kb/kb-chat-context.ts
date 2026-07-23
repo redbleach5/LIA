@@ -162,6 +162,9 @@ function isGenericKbFollowUp(message: string): boolean {
 
 /**
  * Нужен ли proactive KB search: явный KB-вопрос или уточнение в треде с KB-контекстом.
+ *
+ * ALL-CAPS / identifiers alone do NOT trigger search unless the thread is already
+ * about KB or the message is an explicit KB question (latency false-positive fix).
  */
 export function shouldPreSearchKbForChat(
   message: string,
@@ -170,9 +173,11 @@ export function shouldPreSearchKbForChat(
 ): boolean {
   if (isKbQuestion(message)) return true;
 
-  if (extractContentIdentifiers(message).length > 0) return true;
-
   const { hasKbDiscussion } = extractThreadKbSignals(recentTurns, isKbQuestion);
+
+  // Identifiers (UPPER_SNAKE / Cyrillic ALL-CAPS) only when already in a KB thread.
+  if (extractContentIdentifiers(message).length > 0 && hasKbDiscussion) return true;
+
   if (!hasKbDiscussion) return false;
 
   if (extractUserSpecificTerms(message).length > 0) return true;

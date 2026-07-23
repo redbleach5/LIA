@@ -10,7 +10,7 @@
 │  ├── ChatPanel (IntersectionObserver auto-scroll)                │
 │  ├── AvatarColumn (VRM, PresenceStage, agent ring/bubble) │
 │  ├── HeaderStatus (чаты · образ · «Ещё»: KB, тема)              │
-│  ├── AgentWorkbench (ход / правки / файлы над composer)          │
+│  ├── AgentWorkbench (ход / design / terminal / preview; правки/файлы по мере надобности) │
 │  └── EpisodesSidebar (AlertDialog, cursor pagination)            │
 ├──────────────────────────────────────────────────────────────────┤
 │                      Next.js API Routes                           │
@@ -26,9 +26,9 @@
 │  └── proxy.ts (Next.js) → X-Forwarded-For + LIA_INTERNAL_TOKEN│
 ├──────────────────────────────────────────────────────────────────┤
 │                        Service Layer                              │
-│  ├── lib/chat/         pipeline + phases/stream/helpers, deliberate, self-check │
+│  ├── lib/chat/         pipeline + phases/stream/helpers, deliberate (self-check off) │
 │  ├── lib/agent/        runner + runner-helpers (ReAct, checkpoint, tools)│
-│  ├── lib/memory/       episodes, facts, vector, emotional        │
+│  ├── lib/memory/       episodes, facts, vector (emotional record/recall off) │
 │  ├── lib/kb/           Knowledge Base (Phase 1-5+7)                │
 │  │   ├── chunkers/     document-chunker                          │
 │  │   ├── search.ts     hybrid: vector + BM25 + RRF                 │
@@ -72,32 +72,32 @@ User types message → ChatInput → useChat.sendMessage()
   │ → useAgent / AgentWorkbench — cancel, input, правки, файлы │
   └────────────────────────────────────────────────────────────┘
 
-  ┌─ Chat mode (fast/standard/deep/auto) ─────────────────────┐
+  ┌─ Chat mode (auto | agent) ────────────────────────────────┐
   │ POST /api/chat { text, episodeId, mode }                   │
   │ → parseBody (zod) → runChatPipeline                        │
+  │ Agent routing: client → POST /api/agent (single authority) │
   │                                                            │
   │ Pipeline steps:                                            │
   │ 1.  preflight (Ollama health)                              │
   │ 2.  capability (getCognitiveParams, cached 1h)             │
-  │ 3.  complexity (classifyTaskComplexity, regex)             │
+  │ 3.  complexity (classifyTaskComplexity, heuristic)         │
   │ 4.  plan (planExecution: mode × tier × complexity)         │
-  │ 5.  perceive (emotion decay + regex triggers)              │
-  │ 6.  disagreement (assessDisagreement)                      │
-  │ 7.  save user message                                      │
-  │ 8.  build context (parallel: facts, vector, emotional)     │
+  │ 5.  perceive (emotion decay + keyword triggers)            │
+  │ 6.  disagreement / ethicalBlock short-circuit              │
+  │ 7.  monologue XOR deliberate (at most one pre-call)        │
+  │ 8.  save user message + build context (facts, vector)      │
   │ 9.  build system prompt + messages                         │
-  │ 10. deliberate (if planned, LLM call with 60s timeout)     │
-  │ 11. streamText (main LLM, tools, onFinish callback)        │
-  │ 12. response with metadata headers (-B64 for non-ASCII)    │
+  │ 10. streamText (main LLM, tools, onFinish callback)        │
+  │ 11. response with metadata headers (-B64 for non-ASCII)    │
   │                                                            │
   │ onFinish (background, non-blocking):                       │
   │ ├── saveMessage (companion)                                │
   │ ├── remember (vector memory, sourceType='dialogue')        │
-  │ ├── recordEmotionalAnchor (if intensity > 0.15)            │
-  │ ├── extractAndSaveFacts (LLM call, background)             │
-  │ └── runSelfCheck (LLM call; logs severity, no RL tables)   │
+  │ └── extractAndSaveFacts (LLM call, background)             │
+  │     (no self-check; no emotional-anchor record)            │
   │                                                            │
   │ Client reads stream:                                       │
+  │ ├── X-Message-Id → remap optimistic user id                │
   │ ├── X-Emotion-B64 header → setEmotion in store             │
   │ ├── text chunks → updateLastMessage (accumulated)          │
   │ └── done → finalizeLastMessage                             │
@@ -107,32 +107,28 @@ User types message → ChatInput → useChat.sendMessage()
 ## Cognitive depth pipeline
 
 ```
-User message + mode (auto/fast/standard/deep/agent)
+User message + mode (auto | agent)
   │
   ├─ capability-profile.ts: getCapabilityProfile()
   │   ├── detectGpu() → nvidia-smi (Linux/Win) / system_profiler (macOS)
   │   ├── fetchModelDetails(modelName) → Ollama /api/show
-  │   └── classifyTier(modelSize, vramGb, gpuCount, isCpuOnly) → tier
-  │       └── micro | standard | plus | max  (cached 1h в Setting)
+  │   └── classifyTier(…) → micro | standard | plus | max (cached 1h)
+  │       VRAM pressure = observe/warn only (does not cut budgets)
   │
   ├─ task-complexity.ts: classifyTaskComplexity(text)
-  │   └── trivial | simple | moderate | complex | research (regex)
+  │   └── trivial | simple | moderate | complex | research (heuristic)
   │
   └─ cognitive-depth.ts: planExecution(mode, tier, complexity)
-      └── ExecutionPlan { calls, deliberate, selfCheck, maxTokens,
+      └── ExecutionPlan { calls, deliberate, selfCheck:false, maxTokens,
                           toolsEnabled, autoWebSearch }
 
-  Tier → CognitiveParams (defaults):
-  ├── micro:    1 call,  deliberate=false, selfCheck=false, autoWebSearch=true,  agent 10/10min
-  ├── standard: 2 calls, deliberate=false, selfCheck=true,  autoWebSearch=true,  agent 25/1h
-  ├── plus:     3 calls, deliberate=true,  selfCheck=true,  autoWebSearch=false, agent 100/6h
-  └── max:      4 calls, deliberate=true,  selfCheck=true,  autoWebSearch=false, agent 500/24h
+  EXECUTION_MATRIX (auto mode) — single source of truth for depth:
+  ├── micro:    always single-call
+  ├── standard: deliberate on complex/research only
+  ├── plus/max: deliberate on moderate+
+  └── selfCheck: always false in streaming (cannot revise delivered answer)
 
-  Mode overrides (if user explicitly picked):
-  ├── fast:     1 call, deliberate=false, selfCheck=false, tools=false
-  ├── standard: 1 call, deliberate=false, selfCheck=false, tools=true
-  ├── deep:     3 calls, deliberate=true, selfCheck=true
-  └── agent:    0 chat calls (ReAct-loop in runner.ts instead)
+  Agent mode: ReAct in runner.ts (tools, maxSteps from agent tier)
 ```
 
 ## Agent task flow

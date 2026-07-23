@@ -9,7 +9,7 @@
 // Hard rule: budget must not silently choke Lia (no ctx/agent/tier cuts
 // from pressure). Pressure is for UI / observe-warn only.
 
-import type { CognitiveParams, Tier } from '@/lib/capability-profile';
+import type { Tier } from '@/lib/capability-profile';
 
 // ============================================================================
 // Roles
@@ -285,28 +285,9 @@ export function classifyTierFromBudget(params: {
 }
 
 // ============================================================================
-// Headroom → warn only (never shrink brains)
+// VRAM pressure — observe / warn only (never shrink brains)
 // ============================================================================
-
-/**
- * Context window stays at the model-reported value.
- * Pressure must not silently shrink what Lia can see.
- */
-export function applyHeadroomToContextWindow(
-  modelContextWindow: number,
-  _pressure: VramPressure,
-): number {
-  return modelContextWindow > 0 ? modelContextWindow : 0;
-}
-
-/**
- * Cognitive params stay at full tier strength.
- * VRAM pressure is observe/warn only — we do **not** cut maxTokens /
- * agent steps / duration.
- */
-export function applyHeadroomToCognitiveParams(
-  params: CognitiveParams,
-  _pressure: VramPressure,
-): CognitiveParams {
-  return { ...params };
-}
+//
+// applyHeadroom* helpers were removed: they returned inputs unchanged and
+// suggested adaptive compute. Pressure still flows into CapabilityProfile.budget
+// for UI warnings; context window and CognitiveParams stay at full strength.

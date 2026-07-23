@@ -89,17 +89,14 @@ describe('prompt prefix-cache ordering', () => {
     expect(summaryIdx).toBeLessThan(decisionIdx);
   });
 
-  it('places emotional anchors before liaDecision', () => {
+  it('does not place emotional anchors in the prompt', () => {
     const ctx = makeCtx({
       emotionalAnchors: 'EMOTIONAL_ANCHORS_MARKER',
       liaDecision: BASE_DECISION,
     });
     const prompt = buildSystemPrompt(ctx);
-    const anchorsIdx = prompt.indexOf('EMOTIONAL_ANCHORS_MARKER');
-    const decisionIdx = prompt.indexOf('Ты решила как ответить');
-    expect(anchorsIdx).toBeGreaterThan(0);
-    expect(decisionIdx).toBeGreaterThan(0);
-    expect(anchorsIdx).toBeLessThan(decisionIdx);
+    expect(prompt).not.toContain('EMOTIONAL_ANCHORS_MARKER');
+    expect(prompt).toContain('Ты решила как ответить');
   });
 
   it('places open tasks before web/KB search context', () => {
@@ -143,14 +140,13 @@ describe('prompt prefix-cache ordering', () => {
     expect(summaryIdx).toBeLessThan(recentIdx);
   });
 
-  it('keeps STATIC_PREFIX at the very start of the prompt', () => {
+  it('keeps character summary at the very start of the prompt', () => {
     const ctx = makeCtx();
     const prompt = buildSystemPrompt(ctx);
-    // STATIC_PREFIX starts with "Ты — Лия."
-    expect(prompt.startsWith('Ты — Лия.')).toBe(true);
+    expect(prompt.startsWith('Ты — Лия')).toBe(true);
   });
 
-  it('painfulAnchor signal is at the very end of the prompt (after liaDecision)', () => {
+  it('does not inject painfulAnchor into the prompt', () => {
     const ctx = makeCtx({
       liaDecision: BASE_DECISION,
       painfulAnchor: {
@@ -161,20 +157,12 @@ describe('prompt prefix-cache ordering', () => {
       },
     });
     const prompt = buildSystemPrompt(ctx);
-    const decisionIdx = prompt.indexOf('Ты решила как ответить');
-    const warningIdx = prompt.indexOf('painful_anchor:');
-    expect(decisionIdx).toBeGreaterThan(0);
-    expect(warningIdx).toBeGreaterThan(decisionIdx);
-    // Warning should be in the last 5% of the prompt
-    expect(warningIdx).toBeGreaterThan(prompt.length * 0.95);
-    expect(prompt).toContain('currentToneNeutral=true');
-    expect(prompt).not.toContain('Будь мягче');
+    expect(prompt).toContain('Ты решила как ответить');
+    expect(prompt).not.toContain('painful_anchor:');
   });
 
-  it('does not lose any sections when all are provided', () => {
-    // Use 'full' promptMode so adaptive filtering doesn't drop sections
-    // (emotionalAnchors requires isEmotional; openTasks requires isAgent ||
-    // isCodeTask — 'full' mode includes everything regardless).
+  it('does not lose core sections when all are provided', () => {
+    // Emotional anchors are stored but not injected (prompt theater removed).
     const ctx = makeCtx({
       promptMode: 'full',
       userProfile: 'USER_PROFILE_MARKER',
@@ -198,8 +186,8 @@ describe('prompt prefix-cache ordering', () => {
     expect(prompt).toContain('USER_PROFILE_MARKER');
     expect(prompt).toContain('EPISODE_FACTS_MARKER');
     expect(prompt).toContain('EPISODE_SUMMARY_MARKER');
-    expect(prompt).toContain('EMOTIONAL_ANCHORS_MARKER');
-    expect(prompt).toContain('painful_anchor:');
+    expect(prompt).not.toContain('EMOTIONAL_ANCHORS_MARKER');
+    expect(prompt).not.toContain('painful_anchor:');
     expect(prompt).toContain('OPEN_TASKS_MARKER');
     expect(prompt).toContain('RAG_HITS_MARKER');
     expect(prompt).toContain('RECENT_LIA_MESSAGES_MARKER');

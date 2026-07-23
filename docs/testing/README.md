@@ -7,6 +7,8 @@
 
 Лия v2 **не нуждается в переписывании**. Задача тестов — ловить регрессии в оркестраторах (chat pipeline, agent runner), не гоняться за 100% coverage.
 
+Agentic chat (Cursor-like): unit gate + manual OSS matrix — [`agentic-manual-matrix.md`](./agentic-manual-matrix.md), protocol [`docs/drafts/AGENTIC-CHAT.md`](../drafts/AGENTIC-CHAT.md).
+
 ## Команды
 
 | Команда | Назначение |
@@ -36,7 +38,8 @@
 | Chat pipeline | `pipeline.ts` + phases/stream/helpers | ✅ `chat-pipeline.test.ts` |
 | Agent runner | `runner.ts` + `runner-helpers.ts` | ✅ `agent-runner.test.ts` |
 | Loop detector | `loop-detector.ts` | ✅ |
-| Cognitive glue | deliberate, self-check, persist-turn | ✅ |
+| Cognitive glue | deliberate (XOR monologue), persist-turn | ✅ |
+| Streaming self-check | disabled (cannot revise streamed answer) | — |
 | Memory recall | vector, episodes, facts | ✅ `memory-recall.test.ts` |
 | Workspace / KB scope | workspace-scope, sandbox-plan, kb-step-utils | ✅ |
 

@@ -55,8 +55,10 @@ describe('resolveContextWindow', () => {
     expect(resolveContextWindow(8192, 'standard')).toBe(8192);
   });
 
-  it('caps at 131072 (128k) even if model reports more', () => {
-    expect(resolveContextWindow(200000, 'max')).toBe(131072);
+  it('caps at tier inference limit even if model reports 200k+', () => {
+    expect(resolveContextWindow(200000, 'standard')).toBe(32768);
+    expect(resolveContextWindow(200000, 'max')).toBe(65536);
+    expect(resolveContextWindow(200000, 'micro')).toBe(8192);
   });
 
   it('falls back to tier-based default when contextWindow is 0', () => {

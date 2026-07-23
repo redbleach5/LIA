@@ -4,12 +4,19 @@
 
 import type { StateCreator } from 'zustand';
 import type { EmotionVector } from '@/lib/personality';
-import type { ChatMessage, ChatMode, AgentWorkspaceModeInput } from './types';
+import type { ChatMessage, ChatMode, AgentWorkspaceModeInput, AgentApplyMode } from './types';
 import { INITIAL_EMOTION } from './types';
 import type { EpisodesSlice } from './episodes-slice';
 import type { AgentSlice } from './agent-slice';
 import type { HealthSlice } from './health-slice';
 import { deriveEpisodeTitle } from '@/lib/memory/episode-title';
+import {
+  createEmptyPartsState,
+  partsToPlainText,
+  reduceAgentParts,
+  type AgentPartEvent,
+  type MessagePart,
+} from '@/lib/agent/message-parts';
 
 export type PendingSandboxConfirm = {
   goal: string;
@@ -37,6 +44,8 @@ export type MessagesSlice = {
   mode: ChatMode;
   /** Phase 4: Read / Explore / Edit (auto = infer). */
   agentWorkspaceMode: AgentWorkspaceModeInput;
+  /** P3: ask before write vs auto-apply (sticky per session; persisted lightly). */
+  agentApplyMode: AgentApplyMode;
   pendingSandboxConfirm: PendingSandboxConfirm | null;
   pendingAgentRouteConfirm: PendingAgentRouteConfirm | null;
 
@@ -52,8 +61,19 @@ export type MessagesSlice = {
   setStreaming: (s: boolean) => void;
   setMode: (m: ChatMode) => void;
   setAgentWorkspaceMode: (m: AgentWorkspaceModeInput) => void;
+  setAgentApplyMode: (m: AgentApplyMode) => void;
   setPendingSandboxConfirm: (p: PendingSandboxConfirm | null) => void;
   setPendingAgentRouteConfirm: (p: PendingAgentRouteConfirm | null) => void;
+  /**
+   * Ensure an agent-turn companion message exists for taskId, then reduce event into parts[].
+   * Workbench must not write bubble content — only this path.
+   */
+  applyAgentPartEvent: (taskId: string, event: AgentPartEvent) => void;
+  /** Optimistic local patch of agent-turn parts (Apply/undo before SSE). */
+  patchAgentTurnParts: (
+    taskId: string,
+    updater: (parts: MessagePart[]) => MessagePart[],
+  ) => void;
 };
 
 export const createMessagesSlice: StateCreator<
@@ -69,6 +89,10 @@ export const createMessagesSlice: StateCreator<
   isStreaming: false,
   mode: 'auto',
   agentWorkspaceMode: 'auto',
+  agentApplyMode: (typeof window !== 'undefined'
+    && window.localStorage?.getItem('lia.agentApplyMode') === 'auto')
+    ? 'auto'
+    : 'ask',
   pendingSandboxConfirm: null,
   pendingAgentRouteConfirm: null,
 
@@ -144,8 +168,87 @@ export const createMessagesSlice: StateCreator<
   setStreaming: (s) => set({ isStreaming: s }),
   setMode: (m) => set({ mode: m }),
   setAgentWorkspaceMode: (m) => set({ agentWorkspaceMode: m }),
+  setAgentApplyMode: (m) => {
+    try {
+      if (typeof window !== 'undefined') window.localStorage?.setItem('lia.agentApplyMode', m);
+    } catch { /* ignore */ }
+    set({ agentApplyMode: m });
+  },
   setPendingSandboxConfirm: (p) => set({ pendingSandboxConfirm: p }),
   setPendingAgentRouteConfirm: (p) => set({ pendingAgentRouteConfirm: p }),
+
+  applyAgentPartEvent: (taskId, event) => set((s) => {
+    const idx = s.messages.findIndex(
+      m => m.agentTaskId === taskId && m.role === 'companion',
+    );
+    const base = idx >= 0
+      ? s.messages[idx]
+      : {
+          id: `agent-turn-${taskId}`,
+          role: 'companion' as const,
+          content: '',
+          createdAt: Date.now(),
+          streaming: true,
+          agentTaskId: taskId,
+          parts: [],
+          partsState: createEmptyPartsState(Date.now()),
+        };
+
+    const prevState = base.partsState ?? createEmptyPartsState(base.createdAt);
+    const nextState = reduceAgentParts(prevState, event);
+    const content = partsToPlainText(nextState.parts) || base.content;
+    const terminal = event.type === 'task_done'
+      || event.type === 'task_failed'
+      || event.type === 'task_cancelled';
+    const updated: ChatMessage = {
+      ...base,
+      content,
+      parts: nextState.parts,
+      partsState: nextState,
+      streaming: terminal ? false : true,
+      agentTaskId: taskId,
+    };
+
+    if (idx >= 0) {
+      const messages = s.messages.slice();
+      messages[idx] = updated;
+      return { messages };
+    }
+    // New agent-turn bubble
+    const preview = truncatePreview(content);
+    const episodes = s.currentEpisodeId
+      ? s.episodes.map(e => e.id === s.currentEpisodeId
+        ? {
+            ...e,
+            messageCount: e.messageCount + 1,
+            preview: preview || e.preview,
+            updatedAt: new Date().toISOString(),
+          }
+        : e)
+      : s.episodes;
+    return { messages: [...s.messages, updated], episodes };
+  }),
+
+  patchAgentTurnParts: (taskId, updater) => set((s) => {
+    const idx = s.messages.findIndex(
+      m => m.agentTaskId === taskId && m.role === 'companion',
+    );
+    if (idx < 0) return s;
+    const base = s.messages[idx];
+    const prevParts = base.parts ?? [];
+    const nextParts: MessagePart[] = updater(prevParts);
+    const content = partsToPlainText(nextParts) || base.content;
+    const messages = s.messages.slice();
+    messages[idx] = {
+      ...base,
+      parts: nextParts,
+      content,
+      partsState: base.partsState
+        ? { ...base.partsState, parts: nextParts }
+        : createEmptyPartsState(base.createdAt),
+    };
+    return { messages };
+  }),
 });
 
 function truncatePreview(content: string): string | null {

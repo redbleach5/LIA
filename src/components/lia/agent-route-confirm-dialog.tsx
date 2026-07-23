@@ -50,6 +50,7 @@ export function AgentRouteConfirmDialog() {
           goal,
           autoStart: true,
           workspaceMode,
+          applyMode: useChatStore.getState().agentApplyMode,
           forceAgent: true,
         }),
       });

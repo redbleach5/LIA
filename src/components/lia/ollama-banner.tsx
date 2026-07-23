@@ -3,6 +3,7 @@
 import { useChatStore } from '@/stores/chat-store';
 import { AlertCircle, RefreshCw, Settings } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { LIA_APP_EVENTS, dispatchLiaAppEvent, onLiaAppEvent } from '@/lib/lia-app-events';
 
 export function OllamaBanner() {
   const ok = useChatStore(s => s.ollamaOk);
@@ -13,12 +14,11 @@ export function OllamaBanner() {
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const handler = () => {
+    const unsub = onLiaAppEvent(LIA_APP_EVENTS.settingsChanged, () => {
       setDismissed(false);
-    };
-    window.addEventListener('lia-settings-changed', handler);
+    });
     return () => {
-      window.removeEventListener('lia-settings-changed', handler);
+      unsub();
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
     };
   }, []);
@@ -35,11 +35,11 @@ export function OllamaBanner() {
       retryTimeoutRef.current = null;
       setRetrying(false);
     }, 10_000);
-    window.dispatchEvent(new Event('lia-settings-changed'));
+    dispatchLiaAppEvent(LIA_APP_EVENTS.settingsChanged);
   };
 
   const openSettings = () => {
-    window.dispatchEvent(new Event('lia-open-settings'));
+    dispatchLiaAppEvent(LIA_APP_EVENTS.openSettings);
   };
 
   return (

@@ -1,7 +1,6 @@
-// POST /api/kb/codebase — create codebase source and start indexing
-//
-// Also available via Settings → «Добавить проект» (POST /api/kb/project).
-// This route remains for curl / agent / docs-only code index.
+// POST /api/kb/codebase — legacy create-codebase endpoint.
+// Prefer POST /api/kb/project (Settings → «Добавить проект»). Kept for curl /
+// scripts; new UI must use /api/kb/project.
 //
 // Body:
 //   {

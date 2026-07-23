@@ -20,7 +20,11 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { AgentTask } from '../task';
 import { resolveScopedPath } from '../fs-helpers';
-import { logger } from '@/lib/logger';
+import { sanitizeCommandArgs, sanitizePackageManagerArgs } from '../command-sanitize';
+import { emitAgentEvent } from '../events';
+import { getTaskApplyMode } from '../file-changes';
+import { resolvePermissionTier, shellNeedsPermission } from '../permission-tiers';
+import { waitForUserInput } from '../wait-input';
 
 const execFileAsync = promisify(execFile);
 
@@ -108,6 +112,12 @@ export function validateRunCommand(command: string, args: string[]): RunCommandV
     if (a.length > MAX_ARG_LEN) return { ok: false, error: `arg too long (max ${MAX_ARG_LEN})` };
   }
 
+  const meta = sanitizeCommandArgs(args);
+  if (!meta.ok) return { ok: false, error: meta.error };
+
+  const pkg = sanitizePackageManagerArgs(bin, args);
+  if (!pkg.ok) return { ok: false, error: pkg.error };
+
   if (bin === 'git') {
     const sub = args.find(a => a.length > 0 && !a.startsWith('-'));
     if (!sub) return { ok: false, error: 'git requires a subcommand' };
@@ -172,6 +182,27 @@ export function makeRunCommandTool(task: AgentTask) {
       const validated = validateRunCommand(command, args ?? []);
       if (!validated.ok) return { error: validated.error, success: false };
 
+      const applyMode = getTaskApplyMode(task.id);
+      const tier = resolvePermissionTier('edit', applyMode);
+      if (shellNeedsPermission(tier)) {
+        emitAgentEvent({
+          type: 'permission_request',
+          taskId: task.id,
+          requestId: crypto.randomUUID(),
+          kind: 'shell',
+          detail: `Разрешить ${validated.command} ${(validated.args ?? []).join(' ')}?`.slice(0, 240),
+          payload: { command: validated.command, args: validated.args },
+          ts: Date.now(),
+        });
+        const answer = await waitForUserInput(
+          task.id,
+          `Разрешить команду: ${validated.command} ${(validated.args ?? []).slice(0, 6).join(' ')}? (да/нет)`,
+        );
+        if (!/^(да|yes|y|ok|ага|разреш)/i.test(answer.trim())) {
+          return { error: 'command denied by user', success: false, denied: true };
+        }
+      }
+
       const scoped = await resolveScopedPath(task, cwd || '.', 'Команды без рабочей директории запрещены.');
       if (!scoped.ok) return { error: scoped.error, success: false };
 
@@ -198,6 +229,24 @@ export function makeRunCommandTool(task: AgentTask) {
 
         const out = truncate(stdout ?? '', MAX_OUTPUT_CHARS);
         const err = truncate(stderr ?? '', MAX_OUTPUT_CHARS);
+        if (out.text) {
+          emitAgentEvent({
+            type: 'runtime_log',
+            taskId: task.id,
+            stream: 'stdout',
+            text: out.text.slice(0, 4_000),
+            ts: Date.now(),
+          });
+        }
+        if (err.text) {
+          emitAgentEvent({
+            type: 'runtime_log',
+            taskId: task.id,
+            stream: 'stderr',
+            text: err.text.slice(0, 4_000),
+            ts: Date.now(),
+          });
+        }
         return {
           command: validated.command,
           args: validated.args,

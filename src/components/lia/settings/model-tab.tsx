@@ -4,7 +4,7 @@
 // ModelTab — настройки Ollama (chat / agent / embed).
 // ============================================================================
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { isOllamaLoopbackUrl, normalizeOllamaBaseUrl } from '@/lib/ollama-base-url';
 import type { Settings } from './types';
 import { describeEmbedModel } from './describe-embed-model';
+import { LIA_APP_EVENTS, dispatchLiaAppEvent } from '@/lib/lia-app-events';
 
 /** Embed / retrieval models must not appear in the chat picker. */
 const EMBED_MODEL_RE = /embed|nomic|minilm|e5-/i;
@@ -125,7 +126,7 @@ export function ModelTab({
         toast.success(`Модель: ${data.model || nextModel}`);
       }
       await onSaved();
-      window.dispatchEvent(new CustomEvent('lia-settings-changed'));
+      dispatchLiaAppEvent(LIA_APP_EVENTS.settingsChanged);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`Не удалось сохранить: ${msg}`);
@@ -311,9 +312,12 @@ export function ModelTab({
         <Label className="text-xs">
           Модель для агента
           <span className="text-text-dim font-normal ml-1.5">
-            — длинные задачи (можно как у чата)
+            — длинные задачи с tools (не Reasoning Distilled)
           </span>
         </Label>
+        <p className="text-[10px] text-text-dim leading-snug -mt-0.5 mb-1">
+          Для Агента нужна модель с tools; Reasoning Distilled — для обычного диалога.
+        </p>
         <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
           <button
             type="button"
@@ -440,6 +444,74 @@ export function ModelTab({
 
         </div>
       </details>
+
+      <McpSettingsBlock />
     </div>
+  );
+}
+
+function McpSettingsBlock() {
+  const [servers, setServers] = useState<Array<{ id: string; name: string; enabled: boolean }>>([]);
+  const [loading, setLoading] = useState(false);
+
+  const refresh = async () => {
+    try {
+      const res = await fetch('/api/agent/mcp');
+      if (!res.ok) return;
+      const data = await res.json();
+      setServers(data.servers ?? []);
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  return (
+    <details className="mt-3 rounded border border-border/60 p-2">
+      <summary className="text-xs font-medium cursor-pointer">MCP (бонус)</summary>
+      <p className="text-[10px] text-text-dim mt-1 mb-2">
+        Mock MCP tools для агента. Env <code className="font-mono">LIA_MCP_ENABLED=1</code> или тоггл ниже.
+        Выключение не ломает агент.
+      </p>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="text-[10px] h-7 mb-2"
+        disabled={loading}
+        onClick={async () => {
+          setLoading(true);
+          await refresh();
+          setLoading(false);
+        }}
+      >
+        {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+        <span className="ml-1">Обновить</span>
+      </Button>
+      <div className="space-y-1">
+        {servers.map((s) => (
+          <label key={s.id} className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={s.enabled}
+              onChange={async (e) => {
+                await fetch('/api/agent/mcp', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ id: s.id, enabled: e.target.checked }),
+                });
+                await refresh();
+              }}
+            />
+            <span>{s.name}</span>
+            <span className="font-mono text-text-dim text-[10px]">{s.id}</span>
+          </label>
+        ))}
+        {servers.length === 0 && (
+          <p className="text-[10px] text-text-dim">Нет серверов — нажми «Обновить».</p>
+        )}
+      </div>
+    </details>
   );
 }

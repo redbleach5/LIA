@@ -60,11 +60,8 @@ export async function parseBody<T>(
 // Schemas — по одной на каждый POST endpoint с body.
 // ============================================================================
 
-// POST /api/chat
-const chatModeSchema = z.union([
-  z.enum(['auto', 'agent']),
-  z.enum(['fast', 'standard', 'deep']),
-]).transform(v => (v === 'agent' ? 'agent' : 'auto'));
+// POST /api/chat — UI modes only (depth is server-side from tier × complexity).
+const chatModeSchema = z.enum(['auto', 'agent']);
 
 export const chatRequestSchema = z.object({
   text: z.string().max(100_000, 'message too long').default(''),
@@ -110,6 +107,10 @@ export const createAgentTaskSchema = z.object({
   workspaceMode: z.enum(['auto', 'read', 'explore', 'edit']).default('auto'),
   /** Confirm writing into an empty sandbox when Edit has no project/KB path. */
   confirmSandbox: z.boolean().optional(),
+  /** Ask | auto apply for file writes (sticky client preference). */
+  applyMode: z.enum(['ask', 'auto']).optional(),
+  /** Optional auto-commit after Apply on git workspaces. */
+  gitAutoCommit: z.boolean().optional(),
   /**
    * Skip agent intent gate (chat/ask deferral). Used after user confirms
    * «Запустить агента» on an ambiguous goal, or for trusted follow-ups.

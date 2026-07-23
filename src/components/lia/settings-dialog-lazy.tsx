@@ -7,6 +7,7 @@
 import dynamic from 'next/dynamic';
 import { Settings as SettingsIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { LIA_APP_EVENTS, onLiaAppEvent } from '@/lib/lia-app-events';
 
 const SettingsDialog = dynamic(
   () => import('@/components/lia/settings-dialog').then(m => ({ default: m.SettingsDialog })),
@@ -28,9 +29,7 @@ export function SettingsDialogLazy() {
 
   // Banner / other chrome can request settings without a second click.
   useEffect(() => {
-    const open = () => setHasOpened(true);
-    window.addEventListener('lia-open-settings', open);
-    return () => window.removeEventListener('lia-open-settings', open);
+    return onLiaAppEvent(LIA_APP_EVENTS.openSettings, () => setHasOpened(true));
   }, []);
 
   if (!hasOpened) {

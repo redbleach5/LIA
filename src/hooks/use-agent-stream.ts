@@ -21,6 +21,164 @@ function parseEventData(e: Event): Record<string, unknown> | null {
   }
 }
 
+/** Fan SSE payload into parts[] reducer (chat bubble source of truth). */
+function dispatchParts(ctx: StreamCtx, type: string, data: Record<string, unknown> | null) {
+  if (!data) return;
+  const store = useChatStore.getState();
+  const taskId = ctx.activeTaskId;
+  const ts = Number(data.ts ?? Date.now());
+  const base = { taskId, ts, eventId: typeof data.eventId === 'string' ? data.eventId : undefined };
+
+  switch (type) {
+    case 'task_started':
+      store.applyAgentPartEvent(taskId, {
+        ...base, type: 'task_started', goal: String(data.goal ?? ''),
+      });
+      break;
+    case 'task_planning':
+      store.applyAgentPartEvent(taskId, { ...base, type: 'task_planning' });
+      break;
+    case 'task_plan_ready':
+      if (data.plan && typeof data.plan === 'object') {
+        store.applyAgentPartEvent(taskId, {
+          ...base,
+          type: 'task_plan_ready',
+          plan: data.plan as { goal: string; steps: string[]; complexity: string },
+        });
+      }
+      break;
+    case 'step_start':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'step_start',
+        step: Number(data.step),
+        maxSteps: Number(data.maxSteps),
+        thought: String(data.thought ?? ''),
+      });
+      break;
+    case 'step_end':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'step_end',
+        step: Number(data.step),
+        action: String(data.action ?? ''),
+        observation: String(data.observation ?? ''),
+        thought: String(data.thought ?? ''),
+        durationMs: Number(data.durationMs ?? 0),
+      });
+      break;
+    case 'tool_start':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'tool_start',
+        step: Number(data.step),
+        tool: String(data.tool ?? ''),
+        input: data.input,
+      });
+      break;
+    case 'tool_end':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'tool_end',
+        step: Number(data.step),
+        tool: String(data.tool ?? ''),
+        success: Boolean(data.success),
+        output: data.output,
+      });
+      break;
+    case 'task_waiting_input':
+      store.applyAgentPartEvent(taskId, {
+        ...base, type: 'task_waiting_input', question: String(data.question ?? ''),
+      });
+      break;
+    case 'task_synthesizing':
+      store.applyAgentPartEvent(taskId, { ...base, type: 'task_synthesizing' });
+      break;
+    case 'assistant_delta':
+      store.applyAgentPartEvent(taskId, {
+        ...base, type: 'assistant_delta', text: String(data.text ?? ''),
+      });
+      break;
+    case 'file_changed':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'file_changed',
+        step: Number(data.step),
+        changeId: String(data.changeId ?? ''),
+        path: String(data.path ?? ''),
+        tool: (data.tool === 'write_file' ? 'write_file' : 'edit_file'),
+        diff: typeof data.diff === 'string' ? data.diff : undefined,
+        canUndo: Boolean(data.canUndo),
+        pending: Boolean(data.pending),
+      });
+      break;
+    case 'edit_applied':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'edit_applied',
+        changeId: String(data.changeId ?? ''),
+        path: String(data.path ?? ''),
+        tool: (data.tool === 'write_file' ? 'write_file' : 'edit_file'),
+        diff: typeof data.diff === 'string' ? data.diff : undefined,
+        canUndo: Boolean(data.canUndo),
+        step: data.step != null ? Number(data.step) : undefined,
+      });
+      break;
+    case 'edit_rejected':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'edit_rejected',
+        changeId: String(data.changeId ?? ''),
+        path: String(data.path ?? ''),
+        step: data.step != null ? Number(data.step) : undefined,
+      });
+      break;
+    case 'permission_request':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'permission_request',
+        requestId: String(data.requestId ?? ''),
+        kind: (data.kind as 'shell' | 'network' | 'mcp' | 'write') || 'shell',
+        detail: String(data.detail ?? ''),
+        payload: data.payload,
+      });
+      break;
+    case 'runtime_log':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'runtime_log',
+        stream: (data.stream as 'stdout' | 'stderr' | 'system') || 'system',
+        text: String(data.text ?? ''),
+      });
+      break;
+    case 'task_done':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'task_done',
+        resultSummary: String(data.resultSummary ?? ''),
+        chatMessageId: typeof data.chatMessageId === 'string' ? data.chatMessageId : undefined,
+      });
+      break;
+    case 'task_failed':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'task_failed',
+        error: String(data.error ?? 'error'),
+        chatMessageId: typeof data.chatMessageId === 'string' ? data.chatMessageId : undefined,
+      });
+      break;
+    case 'task_cancelled':
+      store.applyAgentPartEvent(taskId, {
+        ...base,
+        type: 'task_cancelled',
+        chatMessageId: typeof data.chatMessageId === 'string' ? data.chatMessageId : undefined,
+      });
+      break;
+    default:
+      break;
+  }
+}
+
 function applyTerminalStatus(
   ctx: StreamCtx,
   status: 'done' | 'failed' | 'cancelled',
@@ -29,8 +187,6 @@ function applyTerminalStatus(
 ) {
   const store = useChatStore.getState();
   store.setActiveTaskStatus(status);
-  // UI-C1 fix: always set result/error even if empty — caller may have
-  // passed an empty string to clear a stale value.
   if (status === 'done') {
     store.setActiveTaskResult(patch.resultSummary ?? '');
   }
@@ -39,9 +195,12 @@ function applyTerminalStatus(
   }
   ctx.updateAgentTaskInList(ctx.activeTaskId, { status, ...patch });
 
-  // Mirror final answer into the main chat list (server also persists to DB).
-  // Only when the user is still viewing the task's episode — otherwise the
-  // message would land in the wrong chat (DB is already correct for the task episode).
+  // Prefer parts[] agent-turn message — skip duplicate plain companion bubble.
+  const hasPartsTurn = store.messages.some(
+    m => m.agentTaskId === ctx.activeTaskId && m.parts && m.parts.length > 0,
+  );
+  if (hasPartsTurn) return;
+
   const content = opts?.chatContent?.trim();
   if (content && (status === 'done' || status === 'failed')) {
     const taskEpisodeId = ctx.taskEpisodeId
@@ -101,17 +260,24 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
         void hydrateCreateRuntimeStudio(task.id);
       }
     },
-    task_planning: () => {
+    task_started: (e) => {
+      const data = parseEventData(e);
+      dispatchParts(ctx, 'task_started', data ?? { goal: '', ts: Date.now() });
+    },
+    task_planning: (e) => {
+      dispatchParts(ctx, 'task_planning', parseEventData(e));
       useChatStore.getState().setActiveTaskStatus('planning');
     },
     task_plan_ready: (e) => {
       const data = parseEventData(e);
+      dispatchParts(ctx, 'task_plan_ready', data);
       if (!data?.plan) return;
       useChatStore.getState().setActiveTaskPlan(data.plan as AgentPlanLive);
       useChatStore.getState().setActiveTaskStatus('executing');
     },
     step_start: (e) => {
       const data = parseEventData(e);
+      dispatchParts(ctx, 'step_start', data);
       if (!data) return;
       const step = Number(data.step);
       useChatStore.getState().addActiveTaskStep({
@@ -131,6 +297,7 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
     },
     step_end: (e) => {
       const data = parseEventData(e);
+      dispatchParts(ctx, 'step_end', data);
       if (!data) return;
       const store = useChatStore.getState();
       const step = Number(data.step);
@@ -154,6 +321,7 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
     },
     tool_start: (e) => {
       const data = parseEventData(e);
+      dispatchParts(ctx, 'tool_start', data);
       if (!data) return;
       const store = useChatStore.getState();
       const step = Number(data.step);
@@ -181,6 +349,7 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
     },
     tool_end: (e) => {
       const data = parseEventData(e);
+      dispatchParts(ctx, 'tool_end', data);
       if (!data) return;
       const store = useChatStore.getState();
       const step = Number(data.step);
@@ -221,20 +390,18 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
     },
     task_waiting_input: (e) => {
       const data = parseEventData(e);
+      dispatchParts(ctx, 'task_waiting_input', data);
       if (!data?.question) return;
       useChatStore.getState().setActiveTaskStatus('waiting_input');
       useChatStore.getState().setActiveTaskQuestion(String(data.question));
     },
-    task_synthesizing: () => {
+    task_synthesizing: (e) => {
+      dispatchParts(ctx, 'task_synthesizing', parseEventData(e) ?? { ts: Date.now() });
       useChatStore.getState().setActiveTaskStatus('synthesizing');
     },
     task_done: (e) => {
-      // UI-C1 fix: previously `if (!data?.resultSummary) return;` — if the
-      // server emitted task_done without resultSummary (empty result,
-      // schema drift, cancelled-then-done), the handler silently returned
-      // and activeTaskStatus stayed at 'synthesizing' forever. Now we
-      // ALWAYS apply the terminal status; only include the field if present.
       const data = parseEventData(e) ?? {};
+      dispatchParts(ctx, 'task_done', data);
       const resultSummary = data.resultSummary != null ? String(data.resultSummary) : '';
       applyTerminalStatus(
         ctx,
@@ -247,8 +414,8 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
       );
     },
     task_failed: (e) => {
-      // UI-C1 fix: same — always apply terminal status.
       const data = parseEventData(e) ?? {};
+      dispatchParts(ctx, 'task_failed', data);
       const error = String(data.error ?? 'unknown error');
       applyTerminalStatus(
         ctx,
@@ -262,6 +429,7 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
     },
     task_cancelled: (e) => {
       const data = parseEventData(e) ?? {};
+      dispatchParts(ctx, 'task_cancelled', data);
       applyTerminalStatus(
         ctx,
         'cancelled',
@@ -283,6 +451,7 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
     },
     file_changed: (e) => {
       const data = parseEventData(e);
+      dispatchParts(ctx, 'file_changed', data);
       if (!data?.changeId || !data?.path) return;
       useChatStore.getState().addActiveTaskFileChange({
         changeId: String(data.changeId),
@@ -293,6 +462,15 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
         step: Number(data.step ?? 0),
         ts: Number(data.ts ?? Date.now()),
       });
+    },
+    edit_applied: (e) => {
+      dispatchParts(ctx, 'edit_applied', parseEventData(e));
+    },
+    edit_rejected: (e) => {
+      dispatchParts(ctx, 'edit_rejected', parseEventData(e));
+    },
+    permission_request: (e) => {
+      dispatchParts(ctx, 'permission_request', parseEventData(e));
     },
     design_proposed: (e) => {
       const data = parseEventData(e);
@@ -329,6 +507,7 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
     },
     runtime_log: (e) => {
       const data = parseEventData(e);
+      dispatchParts(ctx, 'runtime_log', data);
       if (!data?.text) return;
       const stream = data.stream === 'stderr' || data.stream === 'system' ? data.stream : 'stdout';
       useChatStore.getState().addActiveTaskRuntimeLog({

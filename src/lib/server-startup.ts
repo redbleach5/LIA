@@ -205,10 +205,9 @@ export async function logServerStartup(): Promise<void> {
     logger.warn('system', 'KB reconciliation failed to start (non-fatal)', {}, e);
   }
 
-  // Start Reflection Engine — периодическая консолидация эмоциональной памяти.
-  // LLM обобщает похожие emotional anchors в summary, предотвращает деградацию
-  // векторного поиска при накоплении десятков/сотен anchors.
-  // Controlled by LIA_REFLECTION_ENGINE env var (default: true).
+  // Reflection Engine — opt-in LLM consolidation of emotional anchors.
+  // Default OFF (set LIA_REFLECTION_ENGINE=true to enable). Anchors still
+  // record/recall; without this, no periodic LLM burn.
   try {
     const { startReflectionEngine } = await import('./memory/reflection-engine');
     startReflectionEngine();

@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
-import { Plus_Jakarta_Sans, Inter, JetBrains_Mono, Fraunces } from "next/font/google";
+import { Plus_Jakarta_Sans, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { logServerStartup } from "@/lib/server-startup";
@@ -13,10 +13,9 @@ void logServerStartup().catch(() => null);
 
 // ============================================================================
 // Шрифты — Companion Workspace
-//   --font-sans    → Inter (UI density, нейтральный, отлично читается на 12-14px)
-//   --font-display → Plus Jakarta Sans (брендинг, тёплый, скруглённый)
-//   --font-mono    → JetBrains Mono (код, monospace метаданные)
-//   --font-serif   → Fraunces (опционально — для «голоса» Лии в future)
+//   --font-sans    → Inter (UI density)
+//   --font-display → Plus Jakarta Sans (брендинг)
+//   --font-mono    → JetBrains Mono (код)
 // ============================================================================
 const inter = Inter({
   variable: "--font-sans",
@@ -36,14 +35,6 @@ const jetbrains = JetBrains_Mono({
   variable: "--font-mono",
   subsets: ["latin", "cyrillic"],
   weight: ["400", "500", "600"],
-  display: "swap",
-});
-
-const fraunces = Fraunces({
-  variable: "--font-serif",
-  subsets: ["latin"],
-  weight: ["400", "500"],
-  style: ["normal", "italic"],
   display: "swap",
 });
 
@@ -72,7 +63,7 @@ export default function RootLayout({
   return (
     <html lang="ru" data-theme="classic" suppressHydrationWarning>
       <body
-        className={`${inter.variable} ${jakarta.variable} ${jetbrains.variable} ${fraunces.variable} antialiased bg-background text-foreground font-sans`}
+        className={`${inter.variable} ${jakarta.variable} ${jetbrains.variable} antialiased bg-background text-foreground font-sans`}
         suppressHydrationWarning
       >
         <Script id="lia-theme-init" strategy="beforeInteractive">

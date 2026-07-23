@@ -5,32 +5,40 @@ import { useChatStore } from '@/stores/chat-store';
 import { useAgent } from '@/hooks/use-agent';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
+/**
+ * Fallback ask UI when the agent bubble does not yet carry an `ask` part
+ * (e.g. reconnect before parts hydrate). Prefer inline AskCard in the bubble.
+ */
 export function AgentWaitingPrompt() {
   const status = useChatStore(s => s.activeTaskStatus);
   const question = useChatStore(s => s.activeTaskQuestion);
   const activeTaskId = useChatStore(s => s.activeTaskId);
+  const messages = useChatStore(s => s.messages);
   const { provideInput } = useAgent();
   const [answer, setAnswer] = useState('');
-  // UI-C7 fix: track submitting state so we can disable the button + show
-  // a spinner, and so we don't clear the answer until the request succeeds.
   const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    if (status !== 'waiting_input' || !question) return;
-    textareaRef.current?.focus();
-  }, [status, question, activeTaskId]);
+  const bubbleHandlesAsk = Boolean(
+    activeTaskId
+    && messages.some(
+      m =>
+        m.agentTaskId === activeTaskId
+        && m.parts?.some(p => p.type === 'ask' || p.type === 'permission_request'),
+    ),
+  );
 
+  useEffect(() => {
+    if (status !== 'waiting_input' || !question || bubbleHandlesAsk) return;
+    textareaRef.current?.focus();
+  }, [status, question, activeTaskId, bubbleHandlesAsk]);
+
+  if (bubbleHandlesAsk) return null;
   if (status !== 'waiting_input' || !question || !activeTaskId) return null;
 
   const handleSubmit = async () => {
     const text = answer.trim();
     if (!text || submitting) return;
-    // UI-C7 fix: previously `provideInput(...)` was not awaited, and
-    // `setAnswer('')` cleared the textarea immediately. If the request
-    // failed (network error, 409 conflict), the user's typed answer was
-    // lost — they had to re-type it. Now we await, only clear on success,
-    // and show a spinner during the request.
     setSubmitting(true);
     try {
       const ok = await provideInput(activeTaskId, text);

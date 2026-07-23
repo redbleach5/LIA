@@ -5,13 +5,14 @@ import 'server-only';
 // ============================================================================
 
 import { streamText, isStepCount, type ModelMessage } from 'ai';
-import { getChatModel, getModelName } from '@/lib/ollama';
+import { getChatModel, getModelName, setOllamaNumCtx } from '@/lib/ollama';
 import { buildChatTools } from '@/lib/tools';
 import { summarizeLlmError } from '@/lib/llm/error-summary';
-import { chooseModelForQuery } from '@/lib/chat/model-selection';
+import type { ModelChoice } from '@/lib/chat/model-selection';
 import type { Tier } from '@/lib/capability-profile';
 import type { TaskComplexity } from '@/lib/task-complexity';
 import { resolveModelToolsSupport } from '@/lib/llm/tool-support';
+import { resolveInferenceNumCtx } from '@/lib/chat/context-budget';
 import { decideChatTools } from './chat-tools';
 import { persistChatTurn } from './persist-turn';
 import { encodeStreamErrorMessage } from './stream-error';
@@ -83,16 +84,20 @@ export async function runChatStreamText(params: {
   streamError: StreamErrorHolder;
   /** Episode workspace KB pin — hard-filters search_sources. */
   pinnedSourceIds?: string[];
+  /** Precomputed in pipeline — avoid second chooseModelForQuery. */
+  modelChoice: ModelChoice;
+  /** From capability profile — drives Ollama num_ctx. */
+  contextWindow?: number;
 }) {
   const {
     systemPrompt, deliberateContext, coreMessages, userMode, tier, complexity, plan,
     webSearchContext, kbAnswerLocked, episodeId, text, perceivedEmotion, triggers,
-    abortSignal, log, streamError, pinnedSourceIds,
+    abortSignal, log, streamError, pinnedSourceIds, modelChoice,
+    contextWindow = 0,
   } = params;
 
   const tools = buildChatTools({ pinnedSourceIds });
 
-  const modelChoice = await chooseModelForQuery(complexity, tier);
   const model = await getChatModel(modelChoice.usedSecondary ? modelChoice.modelName : undefined);
   const startTime = Date.now();
   const modelName = modelChoice.usedSecondary ? modelChoice.modelName : await getModelName();
@@ -119,6 +124,7 @@ export async function runChatStreamText(params: {
     toolsSupported,
     kbAnswerLocked,
     webSearchContext,
+    complexity,
   });
 
   // Tool-round budget: each search/fetch is a step; leave room for a final
@@ -127,6 +133,10 @@ export async function runChatStreamText(params: {
   const toolRoundBudget = userMode === 'agent'
     ? (tier === 'max' ? 8 : tier === 'plus' ? 6 : 5)
     : (tier === 'max' ? 7 : tier === 'plus' ? 6 : 5);
+
+  const numCtx = resolveInferenceNumCtx(contextWindow, tier);
+  log.debug('chat', 'Ollama num_ctx', { numCtx, contextWindow, tier });
+  setOllamaNumCtx(numCtx);
 
   return streamText({
     model,
@@ -156,6 +166,7 @@ export async function runChatStreamText(params: {
       log.error('chat', 'streamText onError', { ...summary });
     },
     onFinish: async ({ text: fullText, usage }) => {
+      setOllamaNumCtx(undefined);
       await persistChatTurn({
         fullText, usage, startTime, episodeId, text, perceivedEmotion, triggers,
         plan, log,

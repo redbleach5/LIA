@@ -3,8 +3,6 @@
 import { useChatStore } from '@/stores/chat-store';
 import dynamic from 'next/dynamic';
 import { AgentStatusRing } from './agent-status-ring';
-import { AgentWaitingPrompt } from './agent-waiting-prompt';
-import { AgentThoughtBubble } from './agent-thought-bubble';
 import { EmotionIndicator } from './emotion-indicator';
 import { PresenceStage } from './presence-stage';
 import { type ReactNode, Component } from 'react';
@@ -163,14 +161,6 @@ export function AvatarColumn({ onCycleMode }: AvatarColumnProps) {
           </div>
           <EmotionIndicator emotion={emotion} />
         </div>
-
-        {agentActive && (
-          <div className="px-3">
-            <AgentThoughtBubble />
-          </div>
-        )}
-
-        <AgentWaitingPrompt />
 
         <div className="flex-1" />
       </div>

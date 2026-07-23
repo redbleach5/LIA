@@ -74,6 +74,7 @@ vi.mock('@/lib/logger', () => ({
 vi.mock('@/lib/ollama', () => ({
   getChatModel: vi.fn(async () => ({ modelId: 'mock-model' })),
   getModelName: vi.fn(async () => 'qwen2.5:7b'),
+  setOllamaNumCtx: vi.fn(),
   getOllamaSettings: vi.fn(async () => ({
     provider: 'ollama',
     baseUrl: 'http://127.0.0.1:11434',
@@ -214,8 +215,8 @@ describe('Phase 7 — persistChatTurn + dedup contracts', () => {
     expect(innerMonologueCall).toBeUndefined();
   });
 
-  // ── Scenario 2a: standard + emotional → monologue runs (P1b) ──
-  it('standard tier + emotional message → inner monologue runs', async () => {
+  // ── Scenario 2a: standard + emotional → monologue still skipped (latency pass) ──
+  it('standard tier + emotional message → inner monologue skipped', async () => {
     generateTextMock.mockResolvedValueOnce({
       text: JSON.stringify({
         action: 'emotional_response',
@@ -242,11 +243,12 @@ describe('Phase 7 — persistChatTurn + dedup contracts', () => {
       const text = `${params.system ?? ''} ${params.prompt ?? ''}`;
       return text.includes('внутреннее размышление') || text.includes('Реши: как ты хочешь ответить');
     });
-    expect(innerMonologueCall).toBeDefined();
+    // Latency pass: monologue LLM always off — fallback decision only.
+    expect(innerMonologueCall).toBeUndefined();
   });
 
-  // ── Scenario 2b: plus tier → inner monologue NOT skipped ──
-  it('plus tier + moderate complexity → inner monologue runs (extra generateText call)', async () => {
+  // ── Scenario 2b: plus tier → inner monologue still skipped (latency pass) ──
+  it('plus tier + moderate complexity → inner monologue skipped', async () => {
     getCognitiveParamsMock.mockResolvedValue({
       params: { agentMaxSteps: 100, agentMaxDurationSec: 21600, tier: 'plus' },
       profile: {
@@ -268,14 +270,9 @@ describe('Phase 7 — persistChatTurn + dedup contracts', () => {
     });
 
     const { runChatPipeline } = await import('@/lib/chat/pipeline');
-    // Moderate complexity → plus tier keeps inner monologue.
     await runChatPipeline({ text: 'Сложный вопрос требующий анализа', episodeId, mode: 'auto' });
 
-    // On plus tier, inner monologue is NOT skipped — decideHowToRespond runs,
-    // which calls generateText. So generateText should be called at least once
-    // (for inner monologue; deliberate may add another call).
-    expect(generateTextMock).toHaveBeenCalled();
-    // streamText still called once (main response).
+    expect(generateTextMock).not.toHaveBeenCalled();
     expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
 

@@ -1,6 +1,6 @@
 // Cognitive Depth — adaptive pipeline selection (tier × complexity × mode).
 
-import type { CapabilityProfile, CognitiveParams, Tier } from '@/lib/capability-profile';
+import type { CognitiveParams, Tier } from '@/lib/capability-profile';
 import { getTierParams } from '@/lib/capability-profile';
 import type { TaskComplexity } from '@/lib/task-complexity';
 
@@ -10,8 +10,10 @@ export type ExecutionPlan = {
   mode: CognitiveMode;
   tier: Tier;
   complexity: TaskComplexity;
+  /** Soft budget hint for gates (shouldDeliberate needs calls>=2). Not a multi-pass loop. */
   calls: number;
   deliberate: boolean;
+  /** Always false in streaming; kept for plan/header compatibility. */
   selfCheck: boolean;
   maxTokens: number;
   toolsEnabled: boolean;
@@ -25,15 +27,16 @@ type PlanSlice = Pick<
 
 const AGENT_PLAN: Omit<ExecutionPlan, 'tier' | 'complexity' | 'maxTokens'> = {
   mode: 'agent',
-  // calls>=2 required by shouldDeliberate / shouldSelfCheck — was 0, which
-  // silently dead-gated both flags despite deliberate/selfCheck: true.
-  calls: 2,
-  deliberate: true,
-  selfCheck: true,
+  // Chat latency pass: no deliberate pre-call on any path (ReAct agent is separate).
+  calls: 1,
+  deliberate: false,
+  // Streaming self-check cannot revise the answer — keep off (quality-log theater).
+  selfCheck: false,
   toolsEnabled: true,
   autoWebSearch: true,
 };
 
+/** Latency pass: deliberate always off — character via STATIC_CORE + fallback decision. */
 const EXECUTION_MATRIX: Record<Tier, Record<TaskComplexity, PlanSlice>> = {
   micro: {
     trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 512, autoWebSearch: false },
@@ -43,36 +46,32 @@ const EXECUTION_MATRIX: Record<Tier, Record<TaskComplexity, PlanSlice>> = {
     research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: true },
   },
   standard: {
-    // Latency tradeoff (not permanent lobotomy):
-    //   trivial/simple/moderate → single call (8B meta-reasoning often hurts
-    //     quality and adds 30–60s; path back = upgrade tier or raise complexity).
-    //   complex/research → deliberate + self-check (hard work must not be
-    //     silently dumbed down on the default 7–13B install).
-    // See Sprint 8B-audit (B2) + PRIORITIES "never choke Lia".
     trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 512, autoWebSearch: false },
     simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: false },
     moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096, autoWebSearch: false },
-    complex: { calls: 2, deliberate: true, selfCheck: true, maxTokens: 4096, autoWebSearch: false },
-    research: { calls: 2, deliberate: true, selfCheck: true, maxTokens: 4096, autoWebSearch: true },
+    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096, autoWebSearch: false },
+    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096, autoWebSearch: true },
   },
   plus: {
     trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 1024, autoWebSearch: false },
     simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: false },
-    moderate: { calls: 2, deliberate: true, selfCheck: true, maxTokens: 4096, autoWebSearch: false },
-    complex: { calls: 4, deliberate: true, selfCheck: true, maxTokens: 8192, autoWebSearch: false },
-    research: { calls: 3, deliberate: true, selfCheck: true, maxTokens: 8192, autoWebSearch: true },
+    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096, autoWebSearch: false },
+    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 8192, autoWebSearch: false },
+    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 8192, autoWebSearch: true },
   },
   max: {
     trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 1024, autoWebSearch: false },
     simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: false },
-    moderate: { calls: 2, deliberate: true, selfCheck: true, maxTokens: 8192, autoWebSearch: false },
-    complex: { calls: 4, deliberate: true, selfCheck: true, maxTokens: 16384, autoWebSearch: false },
-    research: { calls: 4, deliberate: true, selfCheck: true, maxTokens: 16384, autoWebSearch: true },
+    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 8192, autoWebSearch: false },
+    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 16384, autoWebSearch: false },
+    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 16384, autoWebSearch: true },
   },
 };
 
 function planAuto(tier: Tier, complexity: TaskComplexity, tierParams: CognitiveParams): ExecutionPlan {
   const slice = EXECUTION_MATRIX[tier][complexity];
+  // Latency: no tool schemas on light turns (companion path). Moderate+ keep tools.
+  const lightTurn = complexity === 'trivial' || complexity === 'simple';
   return {
     mode: 'auto',
     tier,
@@ -81,7 +80,7 @@ function planAuto(tier: Tier, complexity: TaskComplexity, tierParams: CognitiveP
     deliberate: slice.deliberate,
     selfCheck: slice.selfCheck,
     maxTokens: slice.maxTokens,
-    toolsEnabled: tierParams.toolsEnabled,
+    toolsEnabled: tierParams.toolsEnabled && !lightTurn,
     autoWebSearch: slice.autoWebSearch ?? tierParams.autoWebSearch,
   };
 }
@@ -90,7 +89,6 @@ export function planExecution(params: {
   mode: CognitiveMode;
   tier: Tier;
   complexity: TaskComplexity;
-  profile: CapabilityProfile | null;
 }): ExecutionPlan {
   const { mode, tier, complexity } = params;
 
@@ -107,10 +105,12 @@ export function planExecution(params: {
   return planAuto(tier, complexity, getTierParams(tier));
 }
 
-export function shouldDeliberate(plan: ExecutionPlan): boolean {
-  return plan.deliberate && plan.calls >= 2;
+/** Always false — chat latency pass removed deliberate pre-calls. */
+export function shouldDeliberate(_plan: ExecutionPlan): boolean {
+  return false;
 }
 
-export function shouldSelfCheck(plan: ExecutionPlan): boolean {
-  return plan.selfCheck && plan.calls >= 2;
+/** Always false while streaming: post-hoc LLM check cannot revise the answer. */
+export function shouldSelfCheck(_plan: ExecutionPlan): boolean {
+  return false;
 }

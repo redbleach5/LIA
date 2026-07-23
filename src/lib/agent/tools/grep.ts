@@ -240,6 +240,94 @@ async function grepWithRg(opts: {
 }
 
 /**
+ * Shared workspace grep used by `grep` and the `file_search` alias.
+ */
+export async function executeGrepSearch(
+  task: AgentTask,
+  params: {
+    pattern: string;
+    path?: string;
+    maxResults?: number;
+    caseInsensitive?: boolean;
+    extension?: string;
+  },
+): Promise<
+  | {
+      pattern: string;
+      path: string;
+      engine: 'rg' | 'node';
+      count: number;
+      truncated: boolean;
+      hits: GrepHit[];
+      hint: string;
+    }
+  | { error: string }
+> {
+  const pattern = params.pattern;
+  const maxResults = params.maxResults ?? 20;
+  const caseInsensitive = params.caseInsensitive ?? false;
+  const extension = params.extension ?? '';
+  const path = params.path ?? '';
+
+  if (pattern.length > MAX_GREP_PATTERN_LEN) {
+    return { error: `Pattern too long (max ${MAX_GREP_PATTERN_LEN} chars)` };
+  }
+
+  const scoped = await resolveScopedPath(task, path?.trim() || '.', 'Grep запрещён без рабочей директории.');
+  if (!scoped.ok) return { error: scoped.error };
+
+  const rootScoped = await resolveScopedPath(task, '.', 'Grep запрещён.');
+  if (!rootScoped.ok) return { error: rootScoped.error };
+
+  const pathPrefix = (path || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  const rg = await resolveRgBinary();
+
+  let engine: 'rg' | 'node' = 'node';
+  let hits: GrepHit[] = [];
+
+  if (rg) {
+    const rgHits = await grepWithRg({
+      rgPath: rg,
+      root: rootScoped.fullPath,
+      pattern,
+      pathPrefix,
+      maxResults,
+      caseInsensitive,
+      globExt: extension,
+    });
+    if (rgHits !== null) {
+      hits = rgHits;
+      engine = 'rg';
+    }
+  }
+
+  if (engine === 'node') {
+    const nodeResult = await grepWithNode({
+      root: rootScoped.fullPath,
+      pattern,
+      pathPrefix,
+      maxResults,
+      caseInsensitive,
+      globExt: extension,
+    });
+    if ('error' in nodeResult) return { error: nodeResult.error };
+    hits = nodeResult.hits;
+  }
+
+  return {
+    pattern,
+    path: pathPrefix || '.',
+    engine,
+    count: hits.length,
+    truncated: hits.length >= maxResults,
+    hits,
+    hint: hits.length === 0
+      ? 'Ничего не найдено. Попробуй короче pattern или path=src, затем read_file по hit.path.'
+      : 'Дальше: read_file(path=hit.path) для полного контекста.',
+  };
+}
+
+/**
  * Grep over the agent workspace (fsScope).
  * Prefers ripgrep when available; otherwise Node walk + RE2 (never V8 RegExp).
  */
@@ -257,66 +345,8 @@ export function makeGrepTool(task: AgentTask) {
       caseInsensitive: z.boolean().default(false),
       extension: z.string().default('').describe('Фильтр расширения без точки: ts, tsx, py (пусто = текстовые файлы)'),
     }),
-    execute: async ({ pattern, path, maxResults, caseInsensitive, extension }) => {
-      if (pattern.length > MAX_GREP_PATTERN_LEN) {
-        return { error: `Pattern too long (max ${MAX_GREP_PATTERN_LEN} chars)` };
-      }
-
-      const scoped = await resolveScopedPath(task, path?.trim() || '.', 'Grep запрещён без рабочей директории.');
-      if (!scoped.ok) return { error: scoped.error };
-
-      // When path is a subfolder, resolveScopedPath already points there;
-      // for prefix filtering we need workspace root. Use task.fsScope as root.
-      const rootScoped = await resolveScopedPath(task, '.', 'Grep запрещён.');
-      if (!rootScoped.ok) return { error: rootScoped.error };
-
-      const pathPrefix = (path || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
-      const rg = await resolveRgBinary();
-
-      let engine: 'rg' | 'node' = 'node';
-      let hits: GrepHit[] = [];
-
-      if (rg) {
-        const rgHits = await grepWithRg({
-          rgPath: rg,
-          root: rootScoped.fullPath,
-          pattern,
-          pathPrefix,
-          maxResults,
-          caseInsensitive,
-          globExt: extension,
-        });
-        if (rgHits !== null) {
-          hits = rgHits;
-          engine = 'rg';
-        }
-      }
-
-      if (engine === 'node') {
-        const nodeResult = await grepWithNode({
-          root: rootScoped.fullPath,
-          pattern,
-          pathPrefix,
-          maxResults,
-          caseInsensitive,
-          globExt: extension,
-        });
-        if ('error' in nodeResult) return { error: nodeResult.error };
-        hits = nodeResult.hits;
-      }
-
-      return {
-        pattern,
-        path: pathPrefix || '.',
-        engine,
-        count: hits.length,
-        truncated: hits.length >= maxResults,
-        hits,
-        hint: hits.length === 0
-          ? 'Ничего не найдено. Попробуй короче pattern или path=src, затем read_file по hit.path.'
-          : 'Дальше: read_file(path=hit.path) для полного контекста.',
-      };
-    },
+    execute: async ({ pattern, path, maxResults, caseInsensitive, extension }) =>
+      executeGrepSearch(task, { pattern, path, maxResults, caseInsensitive, extension }),
   });
 }
 

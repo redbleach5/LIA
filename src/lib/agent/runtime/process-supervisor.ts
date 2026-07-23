@@ -506,14 +506,18 @@ export async function startRuntime(input: StartRuntimeInput): Promise<StartRunti
   );
 
   try {
-    // Windows: npx/npm are .cmd shims — spawn without shell → ENOENT / EINVAL.
-    // Same pattern as scripts/db-init.mjs and build-standalone.mjs.
-    const child = spawn(parsed.command, parsed.args, {
+    // Windows: npx/npm are .cmd shims — spawn without shell → ENOENT.
+    // Prefer *.cmd over shell:true (same pattern as run_command).
+    const command =
+      process.platform === 'win32'
+      && /^(npx|npm|yarn|pnpm|bun)$/i.test(parsed.command)
+        ? `${parsed.command}.cmd`
+        : parsed.command;
+    const child = spawn(command, parsed.args, {
       cwd: input.cwd,
       env: scrubCommandEnv() as NodeJS.ProcessEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      shell: process.platform === 'win32',
     });
     attachChild(session, child);
   } catch (e) {

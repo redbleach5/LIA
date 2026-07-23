@@ -7,12 +7,18 @@ import {
 } from '@/lib/task-complexity';
 
 describe('needsProactiveWebSearch', () => {
-  it('skips conversational greetings and open-ended check-ins', () => {
+  it('skips proactive search for open check-ins without factual stems', () => {
     const msg = 'Привет. что полезного можем сделать сегодня?';
     const complexity = classifyTaskComplexity(msg);
     expect(complexity).toBe('simple');
-    expect(isConversationalMessage(msg, complexity)).toBe(true);
+    // Greeting + residual ask — not conversational-by-default; still no factual stems
+    expect(isConversationalMessage(msg, complexity)).toBe(false);
     expect(needsProactiveWebSearch(msg, complexity)).toBe(false);
+  });
+
+  it('pure greeting is conversational', () => {
+    const msg = 'Привет!';
+    expect(isConversationalMessage(msg, classifyTaskComplexity(msg))).toBe(true);
   });
 
   it('searches for factual external questions', () => {
@@ -38,6 +44,20 @@ describe('needsProactiveWebSearch', () => {
 
   it('short Cyrillic acronym is simple, not trivial', () => {
     expect(classifyTaskComplexity('интересует СМСВ')).toBe('simple');
+  });
+
+  it('greeting plus who-are-you is simple, not trivial', () => {
+    expect(classifyTaskComplexity('Привет. Кто ты?')).toBe('simple');
+  });
+
+  it('acquaintance does not trigger proactive web', () => {
+    expect(needsProactiveWebSearch('Привет. Кто ты?', 'simple')).toBe(false);
+    expect(needsProactiveWebSearch('Расскажи о себе', 'simple')).toBe(false);
+  });
+
+  it('how-to alone does not count as factual external', () => {
+    expect(isFactualQuestion('Как сделать рефакторинг pipeline?')).toBe(false);
+    expect(needsProactiveWebSearch('Как сделать рефакторинг pipeline?', 'simple')).toBe(false);
   });
 
   it('social chatter stays trivial/simple — not moderate (no deliberate×2)', () => {

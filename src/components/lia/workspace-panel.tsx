@@ -10,6 +10,7 @@ import { File, Folder, FolderOpen, RefreshCw, ChevronRight, ChevronDown, BookOpe
 import { cn } from '@/lib/utils';
 import { useChatStore } from '@/stores/chat-store';
 import type { WorkspaceBinding } from '@/lib/agent/workspace-types';
+import { LIA_APP_EVENTS, onLiaAppEvent } from '@/lib/lia-app-events';
 
 type TreeNode = {
   name: string;
@@ -129,8 +130,7 @@ export function WorkspacePanel({
         void loadFile(path);
       }
     };
-    window.addEventListener('lia-open-workspace-file', handler);
-    return () => window.removeEventListener('lia-open-workspace-file', handler);
+    return onLiaAppEvent(LIA_APP_EVENTS.openWorkspaceFile, handler);
   }, [taskId]);
 
   const [fileLoading, setFileLoading] = useState(false);
