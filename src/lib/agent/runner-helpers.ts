@@ -96,7 +96,7 @@ export const PLANNING_MAX_TOKENS = 1200; // short step strings only — never fi
  * Tier-aware output budget for agent LLM phases.
  *
  * Hard-coded 3–4k caps ignored plus/max model capacity (permanent under-use).
- * Execution/synthesis follow CognitiveParams.maxTokens; planning stays compact.
+ * Execution/synthesis follow agent-role CognitiveParams.maxTokens; planning stays compact.
  */
 export async function resolveAgentPhaseMaxTokens(
   phase: 'planning' | 'execution' | 'synthesis',
@@ -104,9 +104,9 @@ export async function resolveAgentPhaseMaxTokens(
   if (phase === 'planning') return PLANNING_MAX_TOKENS;
   const floor = phase === 'synthesis' ? SYNTHESIS_MAX_TOKENS : EXECUTION_MAX_TOKENS;
   try {
-    const { getCognitiveParams } = await import('@/lib/capability-profile');
-    const { params } = await getCognitiveParams();
-    // Trust tier budget; never below legacy floor on standard+ (micro may be lower).
+    const { getAgentCognitiveParams } = await import('@/lib/capability-profile');
+    const { params } = await getAgentCognitiveParams();
+    // Trust agent-tier budget; never below legacy floor on standard+ (micro may be lower).
     if (params.maxTokens < floor) return params.maxTokens;
     return params.maxTokens;
   } catch {
@@ -115,7 +115,7 @@ export async function resolveAgentPhaseMaxTokens(
 }
 
 // LLM call timeouts — конфигурируемые через env.
-// На macOS arm64 с qwen2.5:7b генерация может занимать 60-90с,
+// На macOS arm64 с qwen3:8b генерация может занимать 60-90с,
 // на более мощных машинах с 70B-моделями — до 3-5 минут.
 // Если LLM таймаутит, увеличи LIA_LLM_TIMEOUT_MS в .env.
 // P2-6 fix (M-AGT): guard against NaN from malformed env vars.

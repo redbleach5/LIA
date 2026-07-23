@@ -120,7 +120,7 @@ if (ollamaVer) {
       );
       check('Embedding model', embedCandidates.length > 0, embedCandidates[0] || 'not found — run: ollama pull nomic-embed-text');
     } else {
-      warn('No models installed', 'run: ollama pull qwen2.5:7b && ollama pull nomic-embed-text');
+      warn('No models installed', 'run: ollama pull qwen3:8b && ollama pull nomic-embed-text');
     }
   } catch (e) {
     check('Ollama server running', false, `cannot connect to ${ollamaUrl} — run: ollama serve`);

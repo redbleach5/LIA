@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { listAgentTasks, createAgentTask, type AgentTaskStatus } from '@/lib/agent/task';
 import { runAgentTask, sweepStaleTasks } from '@/lib/agent/runner';
 import { persistAgentGoalToChat } from '@/lib/agent/persist-to-chat';
-import { getCognitiveParams } from '@/lib/capability-profile';
+import { getAgentCognitiveParams } from '@/lib/capability-profile';
 import { logger } from '@/lib/logger';
 import { parseBody, createAgentTaskSchema } from '@/lib/infra/api-validation';
 
@@ -77,8 +77,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Get capability profile to set adaptive agent limits
-    const { params: tierParams } = await getCognitiveParams();
+    // Get capability profile to set adaptive agent limits (agentTier, not chat)
+    const { params: tierParams } = await getAgentCognitiveParams();
 
     // P6-1 fix: apply template overrides if a non-'general' template is specified.
     // Template provides defaults for toolsWhitelist, maxSteps, maxDurationSec.

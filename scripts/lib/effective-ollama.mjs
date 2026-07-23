@@ -7,7 +7,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434';
-const DEFAULT_MODEL = 'qwen2.5:7b';
+const DEFAULT_MODEL = 'qwen3:8b';
 const DEFAULT_EMBED = 'nomic-embed-text';
 
 function parseDotEnv(projectDir) {

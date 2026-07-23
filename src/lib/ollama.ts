@@ -22,7 +22,7 @@ import { normalizeOllamaBaseUrl } from './ollama-base-url';
 // ============================================================================
 
 const DEFAULT_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
-const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'qwen3:8b';
 const DEFAULT_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 /** Optional stronger model for agent plan/execute/synthesize. Empty = same as chat. */
 const DEFAULT_AGENT_MODEL = process.env.OLLAMA_AGENT_MODEL || '';
@@ -715,7 +715,7 @@ export async function checkLlmPreflight(): Promise<
       ok: false,
       failure: {
         code: 'ollama_no_models',
-        message: 'В Ollama нет моделей. Скачай хотя бы одну: `ollama pull qwen2.5:7b`.',
+        message: 'В Ollama нет моделей. Скачай хотя бы одну: `ollama pull qwen3:8b`.',
       },
     };
   }

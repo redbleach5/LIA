@@ -240,8 +240,9 @@ export function clampTier(tier: Tier, maxTier: Tier): Tier {
 }
 
 /**
- * Tier from chat model size + hardware floor (CPU / tiny VRAM → micro).
+ * Tier from model size + hardware floor (CPU / tiny VRAM → micro).
  *
+ * Callers pass the role's model size (chat → companion tier, agent → agent tier).
  * Intentionally does **not** demote tier for multi-model pressure or tight fit.
  * Those surface as `budget.pressure` for UI/warnings only — cutting tier would
  * disable monologue/deliberate/agent depth and "suffocate" Lia.
@@ -253,7 +254,7 @@ export function classifyTierFromBudget(params: {
   isCpuOnly: boolean;
   /**
    * When false (remote Ollama, VRAM unknown), skip the <8GB → micro floor —
-   * tier follows chat model size so a LAN 3060 isn't misread as Mac Metal.
+   * tier follows chat model size so a LAN GPU isn't misread as Mac Metal.
    */
   vramPoolKnown?: boolean;
   /** retained for callers / diagnostics — not used to demote tier */

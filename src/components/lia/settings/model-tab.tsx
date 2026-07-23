@@ -259,7 +259,7 @@ export function ModelTab({
         <p className="text-[10px] text-text-dim">Клик по модели сразу сохраняет выбор</p>
         {chatModels.length === 0 ? (
           <p className="text-xs text-text-dim">
-            Нет доступных моделей. В Ollama скачай, например, qwen2.5:7b
+            Нет доступных моделей. В Ollama скачай, например, qwen3:8b
           </p>
         ) : (
           <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
@@ -288,7 +288,7 @@ export function ModelTab({
         <Input
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          placeholder="qwen2.5:7b"
+          placeholder="qwen3:8b"
           className="text-sm mt-1"
         />
         <p className="text-[10px] text-text-dim">
@@ -355,7 +355,7 @@ export function ModelTab({
         <Input
           value={agentModel}
           onChange={(e) => setAgentModel(e.target.value)}
-          placeholder="пусто = как у чата, напр. qwen2.5:7b"
+          placeholder="пусто = как у чата, напр. qwen3:8b"
           className="text-sm font-mono mt-1"
         />
       </div>

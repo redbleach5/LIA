@@ -47,11 +47,11 @@ export function formatStreamErrorForUser(err: StreamErrorSummary): string {
     msg = 'Не удалось подключиться к Ollama. Запусти `ollama serve` или проверь URL в Настройках → Модель.';
   } else if (/does not support tools/i.test(err.message)) {
     msg = 'Эта модель в Ollama не умеет вызывать инструменты (web_search, KB, …). ' +
-      'Для чата без tools ок; для поиска/агента выбери Qwen3 / Llama 3.1+ в Настройки → Модель. ' +
+      'Для чата без tools ок; для поиска/агента выбери модель с tools в Настройки → Модель. ' +
       `(${err.message.slice(0, 120)})`;
   } else if (/pre-tokenizer|error loading model|llama-server process has terminated/i.test(err.message)) {
     msg = 'Ollama не смогла загрузить модель (часто: старый Ollama или несовместимый GGUF). ' +
-      'Обнови Ollama с ollama.com/download, либо смени модель на `dolphin3` / `qwen3:8b` в Настройки → Модель. ' +
+      'Обнови Ollama с ollama.com/download или выбери другую модель в Настройки → Модель. ' +
       `(${err.message.slice(0, 140)})`;
   } else {
     msg = `Не удалось получить ответ от модели: ${err.message.slice(0, 200)}`;

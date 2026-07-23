@@ -17,7 +17,7 @@ import { hasAgentWorkIntent } from '@/lib/agent/route-intent';
 import { createAgentTask } from '@/lib/agent/task';
 import { runAgentTask } from '@/lib/agent/runner';
 import { persistAgentGoalToChat } from '@/lib/agent/persist-to-chat';
-import { getCognitiveParams } from '@/lib/capability-profile';
+import { getAgentCognitiveParams } from '@/lib/capability-profile';
 import { logger } from '@/lib/logger';
 
 export const runtime = 'nodejs';
@@ -46,8 +46,8 @@ export async function POST(req: NextRequest) {
     });
 
     try {
-      // Get capability profile для adaptive limits
-      const { params: tierParams } = await getCognitiveParams();
+      // Agent-role tier for ReAct limits (may differ from chat companion tier)
+      const { params: tierParams } = await getAgentCognitiveParams();
       const goalText = text.trim();
 
       const { resolveToolsWhitelistForMode, isCodeCreationGoal } = await import('@/lib/agent/kb-step-utils');

@@ -8,7 +8,7 @@
 2. **Контракт, не implementation** — assert outcomes: HTTP status, Message в БД, `tools: undefined` при proactive web search.
 3. **Без Ollama в CI** — `test:ci` не требует запущенного Ollama.
 
-## Файлы (`tests/core/`, **118** cases)
+## Файлы (`tests/core/`, **175** cases)
 
 | Файл | Что покрывает |
 |------|----------------|

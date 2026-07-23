@@ -163,7 +163,7 @@ function checkOllama() {
       log('✓', `Ollama is UP at ${baseUrl}`, COLORS.green);
     } else {
       log('⚠️ ', `Ollama returned ${code || 'no response'} at ${baseUrl}`, COLORS.yellow);
-      log('ℹ️ ', 'Install: https://ollama.com  •  Start: ollama serve  •  Pull model: ollama pull qwen2.5:7b nomic-embed-text', COLORS.yellow);
+      log('ℹ️ ', 'Install: https://ollama.com  •  Start: ollama serve  •  Pull model: ollama pull qwen3:8b nomic-embed-text', COLORS.yellow);
     }
   } catch {
     log('⚠️ ', `Could not reach Ollama at ${baseUrl}`, COLORS.yellow);

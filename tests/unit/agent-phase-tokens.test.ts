@@ -1,21 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const getCognitiveParamsMock = vi.fn();
+const getAgentCognitiveParamsMock = vi.fn();
 
 vi.mock('@/lib/capability-profile', () => ({
-  getCognitiveParams: () => getCognitiveParamsMock(),
+  getAgentCognitiveParams: () => getAgentCognitiveParamsMock(),
 }));
 
 describe('resolveAgentPhaseMaxTokens', () => {
   beforeEach(() => {
     vi.resetModules();
-    getCognitiveParamsMock.mockReset();
+    getAgentCognitiveParamsMock.mockReset();
   });
 
   it('planning stays at compact floor', async () => {
-    getCognitiveParamsMock.mockResolvedValue({
+    getAgentCognitiveParamsMock.mockResolvedValue({
       params: { maxTokens: 16384 },
-      profile: { tier: 'max' },
+      profile: { tier: 'standard', agentTier: 'max' },
+      agentTier: 'max',
     });
     const { resolveAgentPhaseMaxTokens, PLANNING_MAX_TOKENS } = await import(
       '@/lib/agent/runner-helpers'
@@ -23,10 +24,11 @@ describe('resolveAgentPhaseMaxTokens', () => {
     expect(await resolveAgentPhaseMaxTokens('planning')).toBe(PLANNING_MAX_TOKENS);
   });
 
-  it('execution/synthesis follow tier maxTokens on plus/max', async () => {
-    getCognitiveParamsMock.mockResolvedValue({
+  it('execution/synthesis follow agent-tier maxTokens on plus/max', async () => {
+    getAgentCognitiveParamsMock.mockResolvedValue({
       params: { maxTokens: 8192 },
-      profile: { tier: 'plus' },
+      profile: { tier: 'standard', agentTier: 'plus' },
+      agentTier: 'plus',
     });
     const { resolveAgentPhaseMaxTokens } = await import('@/lib/agent/runner-helpers');
     expect(await resolveAgentPhaseMaxTokens('execution')).toBe(8192);
@@ -34,9 +36,10 @@ describe('resolveAgentPhaseMaxTokens', () => {
   });
 
   it('micro may return below legacy execution floor', async () => {
-    getCognitiveParamsMock.mockResolvedValue({
+    getAgentCognitiveParamsMock.mockResolvedValue({
       params: { maxTokens: 2048 },
-      profile: { tier: 'micro' },
+      profile: { tier: 'micro', agentTier: 'micro' },
+      agentTier: 'micro',
     });
     const { resolveAgentPhaseMaxTokens } = await import('@/lib/agent/runner-helpers');
     expect(await resolveAgentPhaseMaxTokens('execution')).toBe(2048);

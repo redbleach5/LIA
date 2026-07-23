@@ -11,7 +11,7 @@
 //
 //   plus     — 14-32B parameters, 24-80GB VRAM (single GPU 4090/5090 territory)
 //              Strategy: 2-4 LLM calls with deliberate + self-check on complex tasks.
-//              Agent: maxSteps up to 50, maxDuration up to 1 hour.
+//              Agent: maxSteps up to 100, maxDuration up to 6 hours.
 //
 //   max      — 33B+ parameters, multi-GPU or 80GB+ VRAM
 //              Strategy: full deliberate loop, no hard limits.
@@ -63,10 +63,24 @@ export type CapabilityBudgetSnapshot = {
 };
 
 export type CapabilityProfile = {
+  /**
+   * Chat-role tier (companion cognitive depth, deliberate/self-check matrix).
+   * Derived from the chat model size — never from the agent model.
+   */
   tier: Tier;
-  modelSize: number;           // in billions (7 = 7B)
-  modelName: string;
-  quantization: string | null; // 'q4_K_M', 'f16', etc.
+  modelSize: number;           // in billions (7 = 7B) — chat model
+  modelName: string;           // chat model
+  /**
+   * Agent-role tier (ReAct maxSteps / duration / phase maxTokens).
+   * Derived from the agent model when configured; otherwise equals `tier`.
+   * Optional on legacy cache entries — use resolveAgentTier().
+   */
+  agentTier?: Tier;
+  /** Agent model size in billions; equals modelSize when agent shares chat. */
+  agentModelSize?: number;
+  /** Resolved agent model name (chat name when agent slot empty). */
+  agentModelName?: string;
+  quantization: string | null; // 'q4_K_M', 'f16', etc. — chat model
   vramGb: number;              // total VRAM available (0 if CPU-only / unknown)
   gpuCount: number;            // 0 if CPU-only
   gpuName: string | null;
@@ -115,13 +129,29 @@ export type CognitiveParams = {
 const CACHE_KEY = 'capability_profile';
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
+/** Fill agentTier fields missing from pre-dual-tier cache entries. */
+export function normalizeCapabilityProfile(profile: CapabilityProfile): CapabilityProfile {
+  return {
+    ...profile,
+    agentTier: profile.agentTier ?? profile.tier,
+    agentModelSize: profile.agentModelSize ?? profile.modelSize,
+    agentModelName: profile.agentModelName ?? profile.modelName,
+  };
+}
+
+/** Agent budget tier — falls back to chat tier on legacy profiles. */
+export function resolveAgentTier(profile: CapabilityProfile | null | undefined): Tier {
+  if (!profile) return 'standard';
+  return profile.agentTier ?? profile.tier ?? 'standard';
+}
+
 async function getCachedProfile(): Promise<CapabilityProfile | null> {
   try {
     const row = await db.setting.findUnique({ where: { key: CACHE_KEY } });
     if (!row) return null;
     const parsed = JSON.parse(row.value) as CapabilityProfile;
     if (Date.now() - parsed.detectedAt > CACHE_TTL_MS) return null;
-    return { ...parsed, source: 'cached' };
+    return normalizeCapabilityProfile({ ...parsed, source: 'cached' });
   } catch {
     return null;
   }
@@ -180,7 +210,7 @@ export function parseInferenceVramGb(raw: string | undefined | null): number | n
  *
  * PRIORITIES: UI-машина ≠ мозг — when Ollama is remote, never use Next-host
  * Metal/`nvidia-smi` as the pool. Owner sets `LIA_INFERENCE_VRAM_GB` for the
- * inference box (e.g. 12 on work 3060).
+ * inference box (e.g. `12` for a 12 GB card).
  */
 export function resolveVramPool(params: {
   ollamaBaseUrl: string;
@@ -548,14 +578,27 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
     chatDetails.quantization,
   );
 
-  const tier = classifyTierFromBudget({
-    modelSizeB: chatDetails.parameterSize,
+  const tierClassifyBase = {
     vramPoolGb: vramGb,
     gpuCount,
     isCpuOnly,
     vramPoolKnown,
-    chatEstimatedVramGb,
     pressure: budget.pressure,
+  } as const;
+
+  const tier = classifyTierFromBudget({
+    ...tierClassifyBase,
+    modelSizeB: chatDetails.parameterSize,
+    chatEstimatedVramGb,
+  });
+
+  const agentTier = classifyTierFromBudget({
+    ...tierClassifyBase,
+    modelSizeB: agentDetails.parameterSize,
+    chatEstimatedVramGb: estimateModelVramGb(
+      agentDetails.parameterSize,
+      agentDetails.quantization,
+    ),
   });
 
   const modelContextWindow = chatDetails.contextWindow;
@@ -584,6 +627,9 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
     tier,
     modelSize: chatDetails.parameterSize,
     modelName,
+    agentTier,
+    agentModelSize: agentDetails.parameterSize,
+    agentModelName: agentName,
     quantization: chatDetails.quantization,
     vramGb,
     gpuCount,
@@ -598,8 +644,11 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
 
   logger.info('system', 'Capability profile detected', {
     tier: profile.tier,
+    agentTier: profile.agentTier,
     model: profile.modelName,
+    agentModel: profile.agentModelName,
     modelSize: profile.modelSize,
+    agentModelSize: profile.agentModelSize,
     vramGb: profile.vramGb,
     vramSource,
     pressure: budget.pressure,
@@ -675,9 +724,12 @@ const TIER_PARAMS: Record<Tier, CognitiveParams> = {
 };
 
 /**
- * Get cognitive parameters for the current tier.
+ * Get cognitive parameters for the chat role (companion depth).
  * If no profile available, returns 'standard' defaults.
  * P1: VRAM pressure is observe/warn only — never cuts budgets.
+ *
+ * Agent ReAct limits must use getAgentCognitiveParams() — they follow
+ * agentTier when chat and agent models differ in size.
  */
 export async function getCognitiveParams(): Promise<{ profile: CapabilityProfile | null; params: CognitiveParams }> {
   const profile = await getCapabilityProfile();
@@ -686,6 +738,23 @@ export async function getCognitiveParams(): Promise<{ profile: CapabilityProfile
   const pressure = profile?.budget?.pressure ?? 'comfortable';
   const params = applyHeadroomToCognitiveParams(base, pressure);
   return { profile, params };
+}
+
+/**
+ * Cognitive params for the agent role (maxSteps / duration / phase tokens).
+ * Uses agentTier when a larger (or smaller) agent model is configured.
+ */
+export async function getAgentCognitiveParams(): Promise<{
+  profile: CapabilityProfile | null;
+  params: CognitiveParams;
+  agentTier: Tier;
+}> {
+  const profile = await getCapabilityProfile();
+  const agentTier = resolveAgentTier(profile);
+  const base = TIER_PARAMS[agentTier];
+  const pressure = profile?.budget?.pressure ?? 'comfortable';
+  const params = applyHeadroomToCognitiveParams(base, pressure);
+  return { profile, params, agentTier };
 }
 
 /**

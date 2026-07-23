@@ -17,7 +17,7 @@
 //   node scripts/commit-msg.mjs --commit       # stage all + commit with msg
 //   node scripts/commit-msg.mjs --amend        # regenerate msg for last commit
 //   node scripts/commit-msg.mjs --lang=en      # English message (default: ru)
-//   OLLAMA_MODEL=qwen2.5:7b node scripts/commit-msg.mjs
+//   OLLAMA_MODEL=qwen3:8b node scripts/commit-msg.mjs
 //
 // Output format (Conventional Commits 1.0.0):
 //   type(scope): subject

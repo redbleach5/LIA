@@ -53,10 +53,15 @@ vi.mock('ai', async (importOriginal) => {
 vi.mock('@/lib/capability-profile', () => ({
   getCognitiveParams: vi.fn(async () => ({
     params: { agentMaxSteps: 25, agentMaxDurationSec: 3600, tier: 'standard' },
-    profile: { tier: 'standard', modelSize: 7, gpuName: 'mock', vramGb: 16, isCpuOnly: false },
+    profile: { tier: 'standard', agentTier: 'standard', modelSize: 7, gpuName: 'mock', vramGb: 16, isCpuOnly: false },
+  })),
+  getAgentCognitiveParams: vi.fn(async () => ({
+    params: { agentMaxSteps: 25, agentMaxDurationSec: 3600, maxTokens: 4096 },
+    profile: { tier: 'standard', agentTier: 'standard', modelSize: 7, gpuName: 'mock', vramGb: 16, isCpuOnly: false },
+    agentTier: 'standard',
   })),
   getCapabilityProfile: vi.fn(async () => ({
-    tier: 'standard', modelSize: 7, gpuName: 'mock', vramGb: 16, isCpuOnly: false,
+    tier: 'standard', agentTier: 'standard', modelSize: 7, gpuName: 'mock', vramGb: 16, isCpuOnly: false,
   })),
 }));
 

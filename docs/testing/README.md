@@ -13,7 +13,7 @@
 |---------|------------|
 | `bun run test:ci` | **Основной gate** — vitest |
 | `bun run test` | Все тесты |
-| `bun run test -- tests/core` | Только контракты ядра (**118**) |
+| `bun run test -- tests/core` | Только контракты ядра (**175**) |
 | `bun run test:safe:local` | Стоп Lia на `:3000` → тесты → restart (`run-tests-safe.mjs`) |
 
 `vitest.config.mts` подхватывает `.env` / default `DATABASE_URL` — локальный `test:ci` не требует ручного export (после `bun run setup` + `db:force-push`).
@@ -22,12 +22,12 @@
 
 | Категория | Тестов (≈) | Что покрывает |
 |-----------|--------|---------------|
-| `tests/core/` | **118** | pipeline, agent runner, loop detector, deliberate/self-check, persist-turn, memory-recall, workspace/KB scope |
+| `tests/core/` | **175** | pipeline, agent runner, loop detector, deliberate/self-check, persist-turn, memory-recall, workspace/KB scope |
 | `tests/unit/` | **~437** | security utils, api-validation, fs-scope, module-integrity, kb-rollback, agent-template-presets, … |
 | `tests/kb/` | — | search, chunking, bm25, indexer, code-indexer |
 | `tests/integration/` | ~16+ | peripheral-smoke |
 | root (`paths`, `task-complexity`) | ~20 | paths, complexity classifier |
-| **Collected** | см. `bun run test:ci` | pass-count зависит от БД/env |
+| **Collected** | **838** (`bun run test:ci`, 2026-07-23) | pass-count зависит от БД/env |
 
 ## Ядро — модули
 

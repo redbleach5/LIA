@@ -22,7 +22,7 @@
 // Usage:
 //   node scripts/ollama-restore.mjs ollama-backup-2026-07-05.json
 //   node scripts/ollama-restore.mjs backup.json --dry-run    # show what would happen
-//   node scripts/ollama-restore.mjs backup.json --only qwen2.5:7b,nomic-embed-text
+//   node scripts/ollama-restore.mjs backup.json --only qwen3:8b,nomic-embed-text
 //
 // Exit codes:
 //   0 — all models restored (or dry-run succeeded)
