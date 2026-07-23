@@ -180,8 +180,8 @@ export const WORKSPACE_MODE_LABELS: Record<WorkspaceModeInput, string> = {
 };
 
 export const WORKSPACE_MODE_DESCRIPTIONS: Record<WorkspaceModeInput, string> = {
-  auto: 'Режим по смыслу задачи: документы → чтение, код → обзор, правки → edit.',
+  auto: 'Доступ по смыслу задачи (не путать с «папкой чата» в шапке).',
   read: 'Только база знаний и веб — без записи на диск.',
   explore: 'Читать файлы и искать в коде — без правок и команд.',
-  edit: 'Можно писать файлы и запускать команды в workspace.',
+  edit: 'Можно писать файлы и запускать команды в папке чата.',
 };

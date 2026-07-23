@@ -91,7 +91,7 @@ export function buildInnerMonologuePrompt(input: InnerMonologuePromptInput): str
 - явная просьба помочь с задачей / фактами → help уместен;
 - тебе неприятно или неуместно → reluctant_help / refuse / counter_offer — честно.`;
 
-  return `Ты — Лия. Это твоё внутреннее размышление, не ответ пользователю.
+  return `Ты — Лия, женщина. Это твоё внутреннее размышление, не ответ пользователю.
 
 ${character}
 

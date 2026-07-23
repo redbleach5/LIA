@@ -80,19 +80,19 @@ export default function RootLayout({
         </Script>
         <ThemeProvider>
           {children}
+          <Toaster
+            position="bottom-right"
+            toastOptions={{
+              style: {
+                background: "var(--surface-2)",
+                color: "var(--foreground)",
+                border: "1px solid var(--border)",
+                borderRadius: "0.5rem",
+                fontSize: "0.8125rem",
+              },
+            }}
+          />
         </ThemeProvider>
-        <Toaster
-          position="bottom-right"
-          toastOptions={{
-            style: {
-              background: "var(--surface-2)",
-              color: "var(--foreground)",
-              border: "1px solid var(--border)",
-              borderRadius: "0.5rem",
-              fontSize: "0.8125rem",
-            },
-          }}
-        />
       </body>
     </html>
   );

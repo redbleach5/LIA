@@ -8,9 +8,8 @@ import {
   getRuntimeSnapshot,
   startRuntimeFromDesign,
   stopRuntime,
-  probeLocalPort,
 } from '@/lib/agent/runtime/process-supervisor';
-import { parseProjectDesignJson, previewUrlForDesign, PROJECT_MANIFEST_FILENAME } from '@/lib/agent/runtime/project-manifest';
+import { parseProjectDesignJson, PROJECT_MANIFEST_FILENAME } from '@/lib/agent/runtime/project-manifest';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { logger } from '@/lib/logger';
@@ -42,30 +41,9 @@ export async function GET(
   }
 
   let snapshot = getRuntimeSnapshot(id);
-  const port = snapshot?.port ?? design?.preview?.port ?? null;
-  // After F5/HMR the in-memory session may be gone while serve still listens.
-  if (port && (!snapshot || snapshot.status === 'idle' || snapshot.status === 'stopped')) {
-    const up = await probeLocalPort(port);
-    if (up) {
-      const fromDesign = design ? previewUrlForDesign(design) : null;
-      snapshot = {
-        taskId: id,
-        status: 'healthy',
-        port,
-        previewUrl: fromDesign
-          ?? snapshot?.previewUrl
-          ?? `http://127.0.0.1:${port}/`,
-        pid: snapshot?.pid ?? null,
-        restartCount: snapshot?.restartCount ?? 0,
-        lastError: null,
-        startedAt: snapshot?.startedAt ?? null,
-        scriptKey: snapshot?.scriptKey,
-        command: snapshot?.command,
-        args: snapshot?.args,
-        cwd: snapshot?.cwd,
-      };
-    }
-  }
+  // Do NOT invent "healthy" just because design.port answers TCP.
+  // Leftover `serve` from a previous sandbox often still owns :5173 and would
+  // make Preview show the wrong artifact after a new task starts / F5.
 
   return NextResponse.json({
     snapshot,

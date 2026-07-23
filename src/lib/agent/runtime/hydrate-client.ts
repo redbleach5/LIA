@@ -66,22 +66,25 @@ export function applyCreateRuntimeHydration(taskId: string, data: RuntimeApiPayl
       lastError: data.snapshot.lastError ?? null,
       scriptKey: data.snapshot.scriptKey ?? null,
     };
-    // If process died but design has iframe port, still expose preview URL for reopen.
-    if (!runtime.previewUrl) {
+    // Only invent a design-based URL while the process is (or should be) live.
+    // Otherwise iframe may open a leftover serve from a previous sandbox on :5173.
+    const live =
+      runtime.status === 'healthy'
+      || runtime.status === 'running'
+      || runtime.status === 'starting';
+    if (!runtime.previewUrl && live) {
       runtime.previewUrl = designPreviewUrl(data.design) ?? designPreviewUrl(store.activeTaskDesign);
     }
     store.setActiveTaskRuntime(runtime);
   } else if (data.design) {
-    const url = designPreviewUrl(data.design);
-    if (url || data.design.preview?.type === 'iframe') {
-      store.setActiveTaskRuntime({
-        status: 'idle',
-        port: data.design.preview.port ?? null,
-        previewUrl: url,
-        pid: null,
-        lastError: null,
-      });
-    }
+    // Design without live snapshot — do not expose a naked :5173 URL (stale preview trap).
+    store.setActiveTaskRuntime({
+      status: 'idle',
+      port: data.design.preview.port ?? null,
+      previewUrl: null,
+      pid: null,
+      lastError: null,
+    });
   }
 
   if (Array.isArray(data.logs) && data.logs.length > 0) {

@@ -159,7 +159,7 @@ export function ChatPanel({
     <div className="flex-1 flex flex-col min-h-0">
       <SandboxConfirmDialog />
       <AgentRouteConfirmDialog />
-      <div className="min-h-7 border-b border-border shrink-0 bg-surface/50">
+      <div className="min-h-7 border-b border-border shrink-0 bg-surface/50 lia-chat-chrome">
         <div className={cn('flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1', 'lia-chat-rail')}>
           <div className="flex-1 min-w-0 flex items-center gap-2">
             <span className="text-xs font-medium truncate text-foreground">
@@ -191,7 +191,7 @@ export function ChatPanel({
                 aria-live="polite"
               >
                 <span className="w-1 h-1 rounded-full bg-accent animate-pulse" />
-                <span>Агент работает… Esc — стоп</span>
+                <span>Агент · Esc — стоп</span>
               </span>
             )}
           </div>

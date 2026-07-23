@@ -335,12 +335,12 @@ function SourceTypeIcon({ type }: { type: string | undefined }) {
     return <LinkIcon className="w-3 h-3 text-accent-2 shrink-0 mt-0.5" />;
   }
   if (type === 'folder') {
-    return <FolderOpen className="w-3 h-3 text-sky-500 shrink-0 mt-0.5" />;
+    return <FolderOpen className="w-3 h-3 text-info shrink-0 mt-0.5" />;
   }
   if (type === 'codebase') {
-    return <Code2 className="w-3 h-3 text-emerald-600 shrink-0 mt-0.5" />;
+    return <Code2 className="w-3 h-3 text-success shrink-0 mt-0.5" />;
   }
-  return <FileText className="w-3 h-3 text-sky-500 shrink-0 mt-0.5" />;
+  return <FileText className="w-3 h-3 text-info shrink-0 mt-0.5" />;
 }
 
 // ============================================================================

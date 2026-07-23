@@ -15,7 +15,7 @@ const EpisodesSidebar = dynamic(
   {
     ssr: false,
     loading: () => (
-      <aside className="lia-sidebar-episodes w-56 shrink-0 border-r border-border bg-surface/40 p-3 space-y-2" aria-hidden>
+      <aside className="lia-sidebar-episodes w-60 shrink-0 border-r border-border bg-surface/40 p-3 space-y-2" aria-hidden>
         <div className="h-7 rounded-md bg-surface-2 animate-pulse" />
         <div className="h-8 rounded-md bg-surface-2/80 animate-pulse" />
         <div className="h-8 rounded-md bg-surface-2/60 animate-pulse" />

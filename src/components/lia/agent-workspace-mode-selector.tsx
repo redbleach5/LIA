@@ -41,7 +41,7 @@ export function AgentWorkspaceModeSelector({ disabled, className }: Props) {
         <button
           type="button"
           title={WORKSPACE_MODE_DESCRIPTIONS[mode]}
-          aria-label={`Режим агента: ${WORKSPACE_MODE_LABELS[mode]}`}
+          aria-label={`Доступ агента: ${WORKSPACE_MODE_LABELS[mode]}`}
           className={cn(
             'inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium',
             'text-muted-foreground hover:text-foreground hover:bg-surface-2/80',

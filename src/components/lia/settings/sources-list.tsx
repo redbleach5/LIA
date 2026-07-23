@@ -21,9 +21,9 @@ import type { KbSource } from './use-kb-sources';
 function StatusBadge({ status }: { status: KbSource['status'] }) {
   const config = {
     idle:      { label: 'Ожидает',   icon: Clock,          cls: 'text-muted-foreground' },
-    indexing:  { label: 'Индексация', icon: Loader2,       cls: 'text-amber-500' },
-    ready:     { label: 'Готов',      icon: CheckCircle2,  cls: 'text-emerald-500' },
-    error:     { label: 'Ошибка',     icon: AlertCircle,   cls: 'text-red-500' },
+    indexing:  { label: 'Индексация', icon: Loader2,       cls: 'text-warning' },
+    ready:     { label: 'Готов',      icon: CheckCircle2,  cls: 'text-success' },
+    error:     { label: 'Ошибка',     icon: AlertCircle,   cls: 'text-destructive' },
     paused:    { label: 'Пауза',      icon: Clock,         cls: 'text-muted-foreground' },
   }[status];
 
@@ -37,8 +37,8 @@ function StatusBadge({ status }: { status: KbSource['status'] }) {
 }
 
 function SourceIcon({ type }: { type: KbSource['type'] }) {
-  if (type === 'folder') return <FolderOpen className="w-4 h-4 mt-0.5 shrink-0 text-sky-500" />;
-  if (type === 'codebase') return <Code2 className="w-4 h-4 mt-0.5 shrink-0 text-emerald-600" />;
+  if (type === 'folder') return <FolderOpen className="w-4 h-4 mt-0.5 shrink-0 text-info" />;
+  if (type === 'codebase') return <Code2 className="w-4 h-4 mt-0.5 shrink-0 text-success" />;
   if (type === 'url') return <LinkIcon className="w-4 h-4 mt-0.5 shrink-0 text-accent-2" />;
   return <FileText className="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />;
 }
@@ -142,7 +142,7 @@ export function SourcesList({
                   )}
                 </div>
                 {source.errorMessage && (
-                  <div className="text-[11px] text-red-500 mt-1 line-clamp-2">
+                  <div className="text-[11px] text-destructive mt-1 line-clamp-2">
                     {source.errorMessage}
                   </div>
                 )}
@@ -157,7 +157,7 @@ export function SourcesList({
                   disabled={actionInProgress === source.id}
                   title="Отменить индексацию"
                 >
-                  <XCircle className="w-3 h-3 text-amber-500" />
+                  <XCircle className="w-3 h-3 text-warning" />
                 </Button>
               )}
               {(source.status === 'ready' || source.status === 'error') && (
@@ -191,7 +191,7 @@ export function SourcesList({
                 disabled={actionInProgress === source.id}
                 title="Удалить"
               >
-                <Trash2 className="w-3 h-3 text-red-500" />
+                <Trash2 className="w-3 h-3 text-destructive" />
               </Button>
             </div>
           </div>

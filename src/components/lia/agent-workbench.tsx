@@ -2,7 +2,7 @@
 
 // AgentWorkbench — агент рядом с чатом + Create Runtime Studio tabs.
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ChevronDown,
   ExternalLink,
@@ -18,7 +18,7 @@ import {
   LayoutTemplate,
 } from 'lucide-react';
 import { useChatStore } from '@/stores/chat-store';
-import { isAgentBusyStatus } from '@/lib/agent/task-status-ui';
+import { agentWorkbenchSummary, isAgentBusyStatus } from '@/lib/agent/task-status-ui';
 import { previewUrlForDesign } from '@/lib/agent/runtime/project-manifest';
 import { cn } from '@/lib/utils';
 import { AgentThoughtBubble } from './agent-thought-bubble';
@@ -30,17 +30,6 @@ import type { ProjectDesignLive, RuntimeLogLive, RuntimeStatusLive } from '@/sto
 
 type TabId = 'flow' | 'design' | 'terminal' | 'preview' | 'edits' | 'files';
 
-const STATUS_LABEL: Record<string, string> = {
-  pending: 'ожидает',
-  planning: 'планирует',
-  executing: 'работает',
-  waiting_input: 'ждёт ответ',
-  synthesizing: 'собирает ответ',
-  done: 'готово',
-  failed: 'ошибка',
-  cancelled: 'отменено',
-};
-
 type AgentWorkbenchProps = {
   /** Thought + waiting live here when full avatar stage is off. */
   includeLiveChrome?: boolean;
@@ -48,6 +37,7 @@ type AgentWorkbenchProps = {
 
 export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProps) {
   const activeTaskId = useChatStore(s => s.activeTaskId);
+  const currentEpisodeId = useChatStore(s => s.currentEpisodeId);
   const status = useChatStore(s => s.activeTaskStatus);
   const plan = useChatStore(s => s.activeTaskPlan);
   const steps = useChatStore(s => s.activeTaskSteps);
@@ -70,40 +60,79 @@ export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProp
 
   const [expanded, setExpanded] = useState(false);
   const [tab, setTab] = useState<TabId>('flow');
+  /** Once the user picks a tab, stop auto-switching until the next task. */
+  const userPickedRef = useRef(false);
+  const lastTaskIdRef = useRef<string | null>(null);
+  const seenEditCountRef = useRef(0);
+  const seenDesignKeyRef = useRef<string | null>(null);
+  const seenRuntimeHealthyRef = useRef(false);
 
+  // Reset auto-switch bookkeeping when the active task changes.
   useEffect(() => {
-    if (editCount === 0) return;
-    setExpanded(true);
-    setTab('edits');
-  }, [editCount]);
+    if (activeTaskId === lastTaskIdRef.current) return;
+    lastTaskIdRef.current = activeTaskId;
+    userPickedRef.current = false;
+    seenEditCountRef.current = 0;
+    seenDesignKeyRef.current = null;
+    seenRuntimeHealthyRef.current = false;
+    setTab('flow');
+    if (activeTaskId) setExpanded(true);
+  }, [activeTaskId]);
 
   useEffect(() => {
     if (status === 'waiting_input') setExpanded(true);
   }, [status]);
 
+  // Soft auto-switch: only when user hasn't chosen a tab, and only on first milestone.
   useEffect(() => {
-    if (!design) return;
-    setExpanded(true);
-    setTab(t => (t === 'flow' || t === 'edits' ? 'design' : t));
-  }, [design?.name, design?.kind]);
+    if (!activeTaskId || userPickedRef.current) return;
 
-  useEffect(() => {
-    if (runtime?.status === 'healthy' || runtime?.status === 'running') {
+    const designKey = design ? `${design.name}:${design.kind}` : null;
+    const runtimeReady =
+      runtime?.status === 'healthy'
+      || (runtime?.status === 'running' && Boolean(runtime.previewUrl));
+
+    // Preview ready — highest signal once per task.
+    if (runtimeReady && !seenRuntimeHealthyRef.current) {
+      seenRuntimeHealthyRef.current = true;
       setExpanded(true);
-      setTab(t => (runtime.previewUrl ? 'preview' : 'terminal'));
+      setTab(runtime?.previewUrl ? 'preview' : 'terminal');
+      return;
     }
-  }, [runtime?.status, runtime?.previewUrl]);
 
-  const summary = useMemo(() => {
-    if (busy) return STATUS_LABEL[status ?? ''] ?? 'агент';
-    if (runtime?.status === 'healthy') return 'preview жив';
-    if (undoableCount > 0) return `${undoableCount} можно откатить`;
-    if (hasEdits) return `${editCount} правок`;
-    if (hasDesign) return `дизайн: ${design?.kind}`;
-    if (status === 'done') return 'готово';
-    if (status === 'failed') return 'ошибка';
-    return STATUS_LABEL[status ?? ''] ?? 'агент';
-  }, [busy, status, undoableCount, hasEdits, editCount, hasDesign, design?.kind, runtime?.status]);
+    // First design arrival.
+    if (designKey && designKey !== seenDesignKeyRef.current) {
+      seenDesignKeyRef.current = designKey;
+      setExpanded(true);
+      setTab(t => (t === 'flow' ? 'design' : t));
+      return;
+    }
+
+    // First file edit only (not every subsequent edit).
+    if (editCount > 0 && seenEditCountRef.current === 0) {
+      seenEditCountRef.current = editCount;
+      setExpanded(true);
+      setTab(t => (t === 'flow' || t === 'design' ? 'edits' : t));
+    } else if (editCount > seenEditCountRef.current) {
+      seenEditCountRef.current = editCount;
+      setExpanded(true);
+    }
+  }, [activeTaskId, editCount, design, design?.name, design?.kind, runtime?.status, runtime?.previewUrl]);
+
+  const selectTab = (id: TabId) => {
+    userPickedRef.current = true;
+    setTab(id);
+  };
+
+  const summary = useMemo(() => agentWorkbenchSummary({
+    status,
+    busy,
+    stepCount: steps.length,
+    editCount,
+    undoableCount,
+    runtimeHealthy: runtime?.status === 'healthy',
+    designKind: design?.kind,
+  }), [busy, status, steps.length, undoableCount, editCount, design?.kind, runtime?.status]);
 
   if (!show || !activeTaskId) return null;
 
@@ -120,23 +149,23 @@ export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProp
 
   return (
     <div className="lia-agent-workbench shrink-0 border-t border-border/70 bg-gradient-to-b from-surface/80 to-background">
-      <div className="lia-chat-rail px-5 py-2.5 space-y-2">
+      <div className="lia-chat-rail px-5 py-3 space-y-2.5">
         {includeLiveChrome && (
           <div className="min-w-0">
             <AgentThoughtBubble />
           </div>
         )}
 
-        <div className="rounded-xl border border-border/80 bg-surface/70 shadow-sm overflow-hidden lia-bubble-enter">
+        <div className="rounded-2xl border border-border/80 bg-surface/80 shadow-sm overflow-hidden lia-bubble-enter">
           <button
             type="button"
             onClick={() => setExpanded(v => !v)}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-surface-2/50 transition-colors"
+            className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-surface-2/50 transition-colors"
             aria-expanded={expanded}
           >
             <span
               className={cn(
-                'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl',
                 busy ? 'bg-accent/12 text-accent' : 'bg-accent-2/10 text-accent-2',
               )}
             >
@@ -148,13 +177,14 @@ export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProp
             </span>
             <span className="min-w-0 flex-1">
               <span className="block text-xs font-medium text-foreground truncate">
-                {busy ? 'Лия за работой' : 'След агента'}
+                Агент
               </span>
-              <span className="block text-[11px] text-text-dim truncate">
-                {summary}
-                {steps.length > 0 ? ` · шаг ${steps.length}` : ''}
-                {agentTasks.length > 1 ? ` · задач ${agentTasks.length}` : ''}
-              </span>
+              {summary && (
+                <span className="block text-[11px] text-text-dim truncate">
+                  {summary}
+                  {agentTasks.length > 1 ? ` · задач ${agentTasks.length}` : ''}
+                </span>
+              )}
             </span>
             {hasEdits && (
               <span className="shrink-0 inline-flex items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
@@ -172,14 +202,14 @@ export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProp
 
           {expanded && (
             <div className="border-t border-border/60">
-              <div className="flex gap-0.5 px-2 pt-2 overflow-x-auto" role="tablist" aria-label="Панель агента">
+              <div className="flex gap-0.5 px-2.5 pt-2.5 overflow-x-auto" role="tablist" aria-label="Панель агента">
                 {visibleTabs.map(t => (
                   <button
                     key={t.id}
                     type="button"
                     role="tab"
                     aria-selected={activeTab === t.id}
-                    onClick={() => setTab(t.id)}
+                    onClick={() => selectTab(t.id)}
                     className={cn(
                       'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors whitespace-nowrap',
                       activeTab === t.id
@@ -201,7 +231,7 @@ export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProp
                 ))}
               </div>
 
-              <div className="px-2 pb-2 pt-1.5 max-h-[min(48vh,26rem)] overflow-y-auto">
+              <div className="px-2.5 pb-2.5 pt-2 max-h-[min(58vh,34rem)] overflow-y-auto">
                 <PanelErrorBoundary fallbackTitle="Панель агента недоступна">
                   {activeTab === 'flow' && (
                     <FlowTab
@@ -210,7 +240,6 @@ export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProp
                       error={error}
                       artifacts={artifacts}
                       busy={busy}
-                      status={status}
                     />
                   )}
                   {activeTab === 'design' && (
@@ -231,7 +260,7 @@ export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProp
                     />
                   )}
                   {activeTab === 'edits' && (
-                    <div className="lia-workbench-embed rounded-lg border border-border/70 bg-background/60 overflow-hidden">
+                    <div className="lia-workbench-embed rounded-xl border border-border/70 bg-background/60 overflow-hidden">
                       {hasEdits ? (
                         <FileChangesPanel taskId={activeTaskId} />
                       ) : (
@@ -242,8 +271,8 @@ export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProp
                     </div>
                   )}
                   {activeTab === 'files' && (
-                    <div className="lia-workbench-embed rounded-lg border border-border/70 bg-background/60 p-2">
-                      <WorkspacePanel taskId={activeTaskId} />
+                    <div className="lia-workbench-embed rounded-xl border border-border/70 bg-background/60 p-2.5">
+                      <WorkspacePanel taskId={activeTaskId} episodeId={currentEpisodeId} />
                     </div>
                   )}
                 </PanelErrorBoundary>
@@ -264,7 +293,7 @@ export function AgentWorkbench({ includeLiveChrome = false }: AgentWorkbenchProp
 
 function EmptyHint({ children }: { children: ReactNode }) {
   return (
-    <p className="px-3 py-4 text-center text-[11px] text-text-dim leading-relaxed">
+    <p className="px-3 py-5 text-center text-[11px] text-text-dim leading-relaxed">
       {children}
     </p>
   );
@@ -275,40 +304,57 @@ function DesignTab({ design }: { design: ProjectDesignLive | null }) {
     return <EmptyHint>Лия ещё не предложила стек и структуру — появится на этапе Design Gate.</EmptyHint>;
   }
   return (
-    <div className="space-y-3 px-1 py-1">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="text-sm font-medium text-foreground">{design.name}</span>
-        <span className="text-[10px] uppercase tracking-wider text-text-dim font-mono">{design.kind}</span>
-      </div>
-      <section>
-        <h4 className="text-[10px] uppercase tracking-wider text-text-dim mb-1.5">Стек</h4>
-        <p className="text-[11px] text-foreground/85 font-mono leading-relaxed">
-          {design.stack.join(' · ')}
-        </p>
+    <div className="space-y-4 px-1 py-1">
+      <header className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold text-foreground tracking-tight">{design.name}</h3>
+        <span className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-text-dim">
+          {design.kind}
+        </span>
+      </header>
+
+      <section className="space-y-1.5">
+        <h4 className="text-[11px] font-medium text-muted-foreground">Стек</h4>
+        <div className="flex flex-wrap gap-1.5">
+          {design.stack.map((s) => (
+            <span
+              key={s}
+              className="rounded-md border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] text-foreground/90"
+            >
+              {s}
+            </span>
+          ))}
+        </div>
       </section>
-      <section>
-        <h4 className="text-[10px] uppercase tracking-wider text-text-dim mb-1.5">Файлы</h4>
-        <ul className="space-y-1">
+
+      <section className="space-y-1.5">
+        <h4 className="text-[11px] font-medium text-muted-foreground">Файлы</h4>
+        <ul className="rounded-xl border border-border/60 bg-background/50 divide-y divide-border/50 overflow-hidden">
           {design.tree.map((t) => (
-            <li key={t.path} className="flex gap-2 text-[11px]">
-              <span className="font-mono text-accent shrink-0">{t.path}</span>
-              <span className="text-text-dim truncate">{t.role}</span>
+            <li key={t.path} className="flex items-baseline gap-3 px-2.5 py-1.5 text-[11px]">
+              <code className="font-mono text-accent shrink-0">{t.path}</code>
+              <span className="text-text-dim truncate min-w-0">{t.role}</span>
             </li>
           ))}
         </ul>
       </section>
+
       {(design.scripts.dev || design.scripts.start) && (
-        <section>
-          <h4 className="text-[10px] uppercase tracking-wider text-text-dim mb-1.5">Scripts</h4>
-          <pre className="text-[10px] font-mono text-foreground/80 bg-background/70 rounded-lg px-2.5 py-2 overflow-x-auto">
-            {design.scripts.dev ? `dev: ${design.scripts.dev}\n` : ''}
-            {design.scripts.start ? `start: ${design.scripts.start}` : ''}
-          </pre>
+        <section className="space-y-1.5">
+          <h4 className="text-[11px] font-medium text-muted-foreground">Scripts</h4>
+          <div className="rounded-xl border border-border/60 bg-background/50 px-2.5 py-2 space-y-1 font-mono text-[11px] text-foreground/85">
+            {design.scripts.dev && (
+              <p><span className="text-text-dim">dev</span> · {design.scripts.dev}</p>
+            )}
+            {design.scripts.start && (
+              <p><span className="text-text-dim">start</span> · {design.scripts.start}</p>
+            )}
+          </div>
         </section>
       )}
-      <section>
-        <h4 className="text-[10px] uppercase tracking-wider text-text-dim mb-1.5">Acceptance</h4>
-        <p className="text-[11px] text-foreground/85 leading-relaxed">{design.acceptance}</p>
+
+      <section className="space-y-1.5">
+        <h4 className="text-[11px] font-medium text-muted-foreground">Критерий готовности</h4>
+        <p className="text-[12px] text-foreground/90 leading-relaxed">{design.acceptance}</p>
       </section>
     </div>
   );
@@ -371,13 +417,13 @@ function TerminalTab({
       {logs.length === 0 ? (
         <EmptyHint>Логи появятся, когда Лия вызовет runtime_start.</EmptyHint>
       ) : (
-        <pre className="rounded-lg border border-border/60 bg-[#1a1612] text-[#e8dcc8] text-[10px] font-mono leading-relaxed px-2.5 py-2 max-h-[18rem] overflow-auto">
+        <pre className="lia-terminal-log rounded-xl border border-border/60 text-[10px] font-mono leading-relaxed px-2.5 py-2 max-h-[22rem] overflow-auto">
           {logs.slice(-120).map((l, i) => (
             <div
               key={`${l.ts}-${i}`}
               className={cn(
-                l.stream === 'stderr' && 'text-red-300/90',
-                l.stream === 'system' && 'text-amber-200/80',
+                l.stream === 'stderr' && 'text-destructive/90',
+                l.stream === 'system' && 'text-warning/90',
               )}
             >
               <span className="opacity-40 mr-1.5">{l.stream === 'system' ? '·' : l.stream === 'stderr' ? '!' : '>'}</span>
@@ -400,10 +446,28 @@ function PreviewTab({
   runtime: RuntimeStatusLive | null;
 }) {
   const [busyAction, setBusyAction] = useState<'stop' | 'restart' | null>(null);
+  const [frameFailed, setFrameFailed] = useState(false);
+  const [loadTimedOut, setLoadTimedOut] = useState(false);
+
   const url = runtime?.previewUrl
     ?? (design ? previewUrlForDesign(design) : null);
-  const canIframe = design?.preview?.type === 'iframe' || Boolean(runtime?.previewUrl);
-  const healthy = runtime?.status === 'healthy' || runtime?.status === 'running';
+  const wantsIframe = design?.preview?.type === 'iframe'
+    || Boolean(runtime?.previewUrl)
+    || (design?.preview?.type !== 'terminal' && Boolean(design?.preview?.port));
+  const healthy = runtime?.status === 'healthy';
+  const starting = runtime?.status === 'starting' || runtime?.status === 'running';
+
+  useEffect(() => {
+    setFrameFailed(false);
+    setLoadTimedOut(false);
+  }, [url, runtime?.status]);
+
+  // If iframe stays blank while "healthy", surface a timeout hint.
+  useEffect(() => {
+    if (!healthy || !url || frameFailed) return;
+    const t = window.setTimeout(() => setLoadTimedOut(true), 8000);
+    return () => window.clearTimeout(t);
+  }, [healthy, url, frameFailed]);
 
   async function runtimeAction(action: 'stop' | 'restart') {
     setBusyAction(action);
@@ -418,7 +482,7 @@ function PreviewTab({
     }
   }
 
-  if (!canIframe) {
+  if (design?.preview?.type === 'terminal' && !runtime?.previewUrl) {
     return (
       <EmptyHint>
         Для этого артефакта preview — терминал (см. вкладку Терминал).
@@ -427,17 +491,18 @@ function PreviewTab({
     );
   }
 
-  const canShowFrame = Boolean(url) && (
-    healthy
-    || runtime?.status === 'starting'
-    || runtime?.status === 'idle'
-    || runtime?.status === 'unhealthy'
-  );
+  if (!wantsIframe && !url) {
+    return (
+      <EmptyHint>
+        Preview появится после Design Gate и runtime_start.
+      </EmptyHint>
+    );
+  }
 
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 px-1 flex-wrap">
-        <span className="text-[10px] font-mono text-text-dim truncate max-w-[14rem]">
+        <span className="text-[10px] font-mono text-text-dim truncate max-w-[min(100%,20rem)]">
           {url ?? 'нет URL'}
           {runtime?.status ? ` · ${runtime.status}` : ''}
         </span>
@@ -472,20 +537,53 @@ function PreviewTab({
           Рестарт
         </button>
       </div>
+
       {!url ? (
         <EmptyHint>
           Preview появится после успешного runtime_start (status: healthy).
         </EmptyHint>
-      ) : canShowFrame ? (
-        <iframe
-          title="Lia artifact preview"
-          src={url}
-          className="w-full h-[min(36vh,18rem)] rounded-lg border border-border/70 bg-white"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
-        />
+      ) : healthy ? (
+        <div className="relative rounded-xl border border-border/70 overflow-hidden bg-surface-2/40">
+          {(frameFailed || loadTimedOut) && (
+            <div className="absolute inset-x-0 top-0 z-10 px-3 py-2 bg-warning/15 border-b border-warning/30 text-[11px] text-foreground/90">
+              {frameFailed
+                ? 'Не удалось встроить preview — открой в новой вкладке.'
+                : 'Страница долго не отвечает — попробуй «Открыть» или «Рестарт».'}
+            </div>
+          )}
+          <iframe
+            key={`${taskId}:${url}:${runtime?.pid ?? 'nopid'}`}
+            title="Lia artifact preview"
+            src={url}
+            className="w-full h-[min(48vh,28rem)] bg-[var(--surface)]"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
+            onError={() => setFrameFailed(true)}
+            onLoad={() => {
+              setFrameFailed(false);
+              setLoadTimedOut(false);
+            }}
+          />
+        </div>
+      ) : starting ? (
+        <div className="flex flex-col items-center justify-center gap-2 py-10 rounded-xl border border-border/60 bg-surface-2/30">
+          <Loader2 className="w-5 h-5 animate-spin text-accent" />
+          <p className="text-[11px] text-text-dim">Поднимаю preview…</p>
+          {url && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-accent hover:underline"
+            >
+              Открыть пока вручную
+            </a>
+          )}
+        </div>
       ) : (
         <EmptyHint>
-          Процесс остановлен — нажми «Рестарт», чтобы снова поднять preview.
+          {runtime?.status === 'unhealthy'
+            ? 'Runtime unhealthy — смотри Терминал или нажми «Рестарт».'
+            : 'Процесс остановлен — нажми «Рестарт», чтобы снова поднять preview.'}
         </EmptyHint>
       )}
     </div>
@@ -498,42 +596,40 @@ function FlowTab({
   error,
   artifacts,
   busy,
-  status,
 }: {
   planSteps: string[];
   steps: Array<{ step: number; action?: string; thought?: string; observation?: string }>;
   error: string | null;
   artifacts: Array<{ filename: string; url: string }>;
   busy: boolean;
-  status: string | null;
 }) {
   if (!planSteps.length && !steps.length && !error && !artifacts.length) {
     return (
       <EmptyHint>
-        {busy
-          ? `Лия ${STATUS_LABEL[status ?? ''] ?? 'думает'}… план появится здесь.`
-          : 'Пока нет шагов по этой задаче.'}
+        {busy ? 'План появится здесь.' : 'Пока нет шагов по этой задаче.'}
       </EmptyHint>
     );
   }
 
   return (
-    <div className="space-y-3 px-1 py-1">
+    <div className="space-y-4 px-1 py-1">
       {error && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">
-          <p className="text-[10px] uppercase tracking-wider text-destructive mb-1">Ошибка</p>
-          <p className="text-[11px] text-foreground/90 leading-relaxed">{error}</p>
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+          <p className="text-[11px] font-medium text-destructive mb-1">Ошибка</p>
+          <p className="text-[12px] text-foreground/90 leading-relaxed">{error}</p>
         </div>
       )}
 
       {planSteps.length > 0 && (
-        <section>
-          <h4 className="text-[10px] uppercase tracking-wider text-text-dim mb-1.5 px-0.5">План</h4>
-          <ol className="space-y-1">
+        <section className="space-y-2">
+          <h4 className="text-[11px] font-medium text-muted-foreground">План</h4>
+          <ol className="rounded-xl border border-border/60 bg-background/50 divide-y divide-border/50 overflow-hidden">
             {planSteps.map((step, i) => (
-              <li key={i} className="flex gap-2 text-[11px] text-foreground/85">
-                <span className="font-mono text-text-dim shrink-0 tabular-nums">{i + 1}.</span>
-                <span className="leading-snug">{step}</span>
+              <li key={i} className="flex gap-3 px-3 py-2 text-[12px] text-foreground/90">
+                <span className="font-mono text-[11px] text-text-dim shrink-0 tabular-nums pt-px">
+                  {String(i + 1).padStart(2, '0')}
+                </span>
+                <span className="leading-snug min-w-0">{step}</span>
               </li>
             ))}
           </ol>
@@ -541,19 +637,24 @@ function FlowTab({
       )}
 
       {steps.length > 0 && (
-        <section>
-          <h4 className="text-[10px] uppercase tracking-wider text-text-dim mb-1.5 px-0.5">Шаги</h4>
-          <div className="space-y-2">
+        <section className="space-y-2">
+          <h4 className="text-[11px] font-medium text-muted-foreground">Шаги</h4>
+          <div className="space-y-1.5">
             {[...steps].slice(-8).map(s => (
-              <div key={s.step} className="rounded-lg border border-border/60 bg-background/50 px-2.5 py-2">
-                <div className="flex items-center gap-1.5 text-[11px]">
-                  <span className="font-mono text-text-dim">#{s.step}</span>
+              <div
+                key={s.step}
+                className="rounded-xl border border-border/60 bg-background/50 px-3 py-2"
+              >
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span className="font-mono text-text-dim tabular-nums">#{s.step}</span>
                   {s.action && (
-                    <span className="font-mono text-accent truncate">{s.action}</span>
+                    <span className="rounded-md bg-accent/10 px-1.5 py-0.5 font-mono text-accent truncate">
+                      {s.action}
+                    </span>
                   )}
                 </div>
                 {s.thought && (
-                  <p className="mt-1 text-[11px] text-muted-foreground leading-snug line-clamp-2">
+                  <p className="mt-1.5 text-[12px] text-muted-foreground leading-snug line-clamp-3">
                     {s.thought}
                   </p>
                 )}
@@ -564,17 +665,15 @@ function FlowTab({
       )}
 
       {artifacts.length > 0 && (
-        <section>
-          <h4 className="text-[10px] uppercase tracking-wider text-text-dim mb-1.5 px-0.5">
-            Артефакты
-          </h4>
-          <ul className="space-y-1">
+        <section className="space-y-2">
+          <h4 className="text-[11px] font-medium text-muted-foreground">Артефакты</h4>
+          <ul className="rounded-xl border border-border/60 bg-background/50 divide-y divide-border/50 overflow-hidden">
             {artifacts.map((a, i) => (
               <li key={`${a.url}-${i}`}>
                 <a
                   href={a.url}
                   download={a.filename}
-                  className="text-[11px] text-accent hover:underline font-mono truncate block"
+                  className="block px-3 py-2 text-[12px] text-accent hover:bg-accent/5 font-mono truncate transition-colors"
                 >
                   {a.filename}
                 </a>

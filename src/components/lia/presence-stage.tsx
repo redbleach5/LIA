@@ -33,14 +33,14 @@ export function PresenceStage({
   const isPortrait = cameraPreset === 'portrait' || cameraPreset === 'closeup';
   const cropFade = background?.edgeColor
     ?? background?.color
-    ?? '#ebe4d8';
+    ?? 'var(--surface-3)';
 
   return (
     <div className="relative w-full h-full min-h-0 overflow-hidden lia-presence-stage">
       {background ? (
         <BackgroundLayer background={background} edgeToEdge />
       ) : (
-        <div className="absolute inset-0 bg-gradient-to-b from-[#faf8f4] via-[#f5f0e8] to-[#ebe4d8]" />
+        <div className="absolute inset-0 lia-presence-stage-fallback" />
       )}
 
       <div

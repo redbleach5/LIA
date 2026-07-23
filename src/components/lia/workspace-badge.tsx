@@ -156,7 +156,7 @@ export function WorkspaceBadge({ episodeId, className }: WorkspaceBadgeProps) {
         const res = await fetch(`/api/episodes/${episodeId}/workspace`, { method: 'DELETE' });
         if (!res.ok) throw new Error('reset failed');
         setBinding(null);
-        toast.success('Workspace сброшен');
+        toast.success('Папка чата отвязана');
         return;
       }
       const res = await fetch(`/api/episodes/${episodeId}/workspace`, {
@@ -167,9 +167,9 @@ export function WorkspaceBadge({ episodeId, className }: WorkspaceBadgeProps) {
       const data = await res.json() as { binding?: WorkspaceBinding; error?: string };
       if (!res.ok) throw new Error(data.error || 'save failed');
       setBinding(data.binding ?? null);
-      toast.success(data.binding ? `Workspace: ${data.binding.label}` : 'Сохранено');
+      toast.success(data.binding ? `Папка чата: ${data.binding.label}` : 'Сохранено');
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Не удалось сохранить workspace');
+      toast.error(e instanceof Error ? e.message : 'Не удалось сохранить папку чата');
     } finally {
       setBusy(false);
     }
@@ -221,7 +221,7 @@ export function WorkspaceBadge({ episodeId, className }: WorkspaceBadgeProps) {
       const data = await res.json() as { facts?: MemoryFact[]; error?: string };
       if (!res.ok) throw new Error(data.error || 'clear failed');
       setMemoryFacts(data.facts ?? []);
-      toast.success('Память workspace очищена (базовые факты восстановлены)');
+      toast.success('Память папки очищена (базовые факты восстановлены)');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Не удалось очистить');
     } finally {
@@ -232,17 +232,17 @@ export function WorkspaceBadge({ episodeId, className }: WorkspaceBadgeProps) {
   if (!episodeId) return null;
 
   const label = binding?.label
-    || (loading ? '…' : 'Нет workspace');
+    || (loading ? '…' : 'Папка чата');
   const kindHint = binding
-    ? binding.kind === 'project' ? 'папка'
+    ? binding.kind === 'project' ? 'диск'
       : binding.kind === 'kb'
         ? (pinStatus === 'indexing' ? 'индекс…'
           : pinStatus === 'error' ? 'ошибка'
             : pinStatus === 'ready' ? 'KB'
               : 'KB')
-        : binding.kind === 'sandbox' ? 'sandbox'
+        : binding.kind === 'sandbox' ? 'черновик'
           : ''
-    : 'привяжи';
+    : 'не выбрана';
 
   return (
     <>
@@ -252,14 +252,14 @@ export function WorkspaceBadge({ episodeId, className }: WorkspaceBadgeProps) {
             type="button"
             disabled={busy}
             className={cn(
-              'inline-flex items-center gap-1 max-w-[11rem] h-5 px-1.5 rounded-md',
+              'inline-flex items-center gap-1 max-w-[12rem] h-5 px-1.5 rounded-md',
               'text-[10px] border border-border/60 bg-surface/80',
               'hover:border-accent/40 hover:text-foreground text-text-dim',
               'disabled:opacity-60',
               binding && 'text-foreground border-accent/30',
               className,
             )}
-            title={binding?.fsPath || binding?.label || 'Выбрать workspace'}
+            title={binding?.fsPath || binding?.label || 'Папка чата — где Лия работает в этом диалоге'}
           >
             {busy ? (
               <Loader2 className="w-3 h-3 animate-spin shrink-0" />
@@ -275,32 +275,32 @@ export function WorkspaceBadge({ episodeId, className }: WorkspaceBadgeProps) {
             <ChevronDown className="w-3 h-3 shrink-0 opacity-50" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" sideOffset={6} className="w-64 rounded-xl">
-          <DropdownMenuLabel className="text-[11px] text-text-dim font-normal">
+        <DropdownMenuContent align="start" sideOffset={6} className="w-72 rounded-xl">
+          <DropdownMenuLabel className="text-[11px] text-text-dim font-normal leading-snug">
             {binding
-              ? 'Где работает Лия в этом чате'
-              : 'Нет workspace — привяжи папку или документ'}
+              ? 'Папка чата — куда агент пишет и откуда читает'
+              : 'Выбери папку на диске, документ KB или черновик-sandbox'}
           </DropdownMenuLabel>
           <DropdownMenuItem className="gap-2 cursor-pointer" onSelect={() => void bindFolder()}>
             <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" />
-            Привязать папку…
+            Папка на диске…
           </DropdownMenuItem>
           {envDefault && (
             <DropdownMenuItem className="gap-2 cursor-pointer" onSelect={() => void bindEnvDefault()}>
               <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" />
-              <span className="flex-1 truncate">Домашний (env)</span>
+              <span className="flex-1 truncate">Домашняя (из env)</span>
             </DropdownMenuItem>
           )}
           <DropdownMenuItem className="gap-2 cursor-pointer" onSelect={() => void bindSandbox()}>
             <Box className="w-3.5 h-3.5 text-muted-foreground" />
-            Sandbox (черновик)
+            Черновик (sandbox)
           </DropdownMenuItem>
 
           {sources.length > 0 && (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuLabel className="text-[11px] text-text-dim font-normal">
-                Из базы знаний
+                Документ из базы знаний
               </DropdownMenuLabel>
               {sources.slice(0, 12).map((s) => (
                 <DropdownMenuItem
@@ -312,9 +312,9 @@ export function WorkspaceBadge({ episodeId, className }: WorkspaceBadgeProps) {
                   <span className="truncate flex-1">{s.name}</span>
                   <span className={cn(
                     'text-[10px] shrink-0',
-                    s.status === 'ready' && 'text-emerald-600',
-                    s.status === 'indexing' && 'text-amber-600',
-                    s.status === 'error' && 'text-red-500',
+                    s.status === 'ready' && 'text-success',
+                    s.status === 'indexing' && 'text-warning',
+                    s.status === 'error' && 'text-destructive',
                     s.status !== 'ready' && s.status !== 'indexing' && s.status !== 'error' && 'text-text-faint',
                   )}>
                     {s.status === 'ready' ? s.type
@@ -338,14 +338,14 @@ export function WorkspaceBadge({ episodeId, className }: WorkspaceBadgeProps) {
                 }}
               >
                 <Brain className="w-3.5 h-3.5 text-muted-foreground" />
-                Что Лия помнит…
+                Что Лия помнит о папке…
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="gap-2 cursor-pointer text-destructive focus:text-destructive"
                 onSelect={() => void putBinding(null)}
               >
                 <X className="w-3.5 h-3.5" />
-                Сбросить
+                Отвязать
               </DropdownMenuItem>
             </>
           )}
@@ -356,11 +356,11 @@ export function WorkspaceBadge({ episodeId, className }: WorkspaceBadgeProps) {
         <AlertDialogContent className="max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Память workspace{memoryLabel ? `: ${memoryLabel}` : ''}
+              Память папки{memoryLabel ? `: ${memoryLabel}` : ''}
             </AlertDialogTitle>
             <AlertDialogDescription>
               Устойчивые факты о проекте — переживают смену чата, если снова
-              привязать тот же workspace.
+              привязать ту же папку.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="max-h-56 overflow-y-auto rounded-lg border border-border/60 bg-surface/40 px-3 py-2">

@@ -208,6 +208,14 @@ export async function POST(req: NextRequest) {
       maxDurationSec: resolvedMaxDurationSec,
     });
 
+    // Previous task's serve often keeps :5173 on Windows — clear before new work.
+    try {
+      const { stopAllRuntimes } = await import('@/lib/agent/runtime/process-supervisor');
+      await stopAllRuntimes();
+    } catch (e) {
+      logger.warn('agent', 'stopAllRuntimes failed (non-fatal)', {}, e);
+    }
+
     // Mirror the short user goal into dialogue (not the curriculum dump).
     const userMessageId = await persistAgentGoalToChat(episodeId, userGoal);
 

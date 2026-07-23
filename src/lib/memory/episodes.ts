@@ -247,16 +247,9 @@ export async function autoTitleEpisode(episodeId: string, firstUserMessage: stri
     // both read title=null, both write. Last wins, wasted writes.
     // Now we use updateMany with where: { title: null } — only updates if
     // title is still null. Atomic at the DB level.
-    const cleaned = firstUserMessage
-      .replace(/[*_`#>~[\]()]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!cleaned) return null;
-
-    const MAX = 60;
-    const title = cleaned.length <= MAX
-      ? cleaned
-      : (cleaned.slice(0, cleaned.lastIndexOf(' ', MAX)) || cleaned.slice(0, MAX)) + '…';
+    const { deriveEpisodeTitle } = await import('@/lib/memory/episode-title');
+    const title = deriveEpisodeTitle(firstUserMessage);
+    if (!title) return null;
 
     const result = await db.episode.updateMany({
       where: { id: episodeId, title: null },

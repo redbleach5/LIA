@@ -51,14 +51,14 @@ type Phase = {
 const PHASES: Record<string, Phase> = {
   planning: {
     icon: Lightbulb,
-    label: 'Планирую',
-    color: 'text-amber-500',
-    bgColor: 'bg-amber-500/10',
-    borderColor: 'border-amber-500/40',
+    label: 'План',
+    color: 'text-warning',
+    bgColor: 'bg-warning/10',
+    borderColor: 'border-warning/40',
   },
   executing: {
     icon: Loader2,
-    label: 'Выполняю',
+    label: 'Шаги',
     color: 'text-accent',
     bgColor: 'bg-accent/10',
     borderColor: 'border-accent/40',
@@ -66,14 +66,14 @@ const PHASES: Record<string, Phase> = {
   },
   waiting_input: {
     icon: MessageCircle,
-    label: 'Спрашиваю',
+    label: 'Вопрос',
     color: 'text-warning',
     bgColor: 'bg-warning/10',
     borderColor: 'border-warning/40',
   },
   synthesizing: {
     icon: Sparkles,
-    label: 'Собираю ответ',
+    label: 'Итог',
     color: 'text-accent-2',
     bgColor: 'bg-accent-2/10',
     borderColor: 'border-accent-2/40',
@@ -106,26 +106,30 @@ const PHASES: Record<string, Phase> = {
 // Когда агент вызывает tool (web_search, code_run, etc) — показываем что делает
 // ============================================================================
 const ACTION_LABELS: Record<string, { icon: typeof Search; label: string }> = {
-  web_search:    { icon: Search,    label: 'ищу в интернете' },
-  fetch_page:    { icon: Search,    label: 'читаю страницу' },
-  http_request:  { icon: Search,    label: 'делаю запрос' },
-  read_file:     { icon: Code2,     label: 'читаю файл' },
-  write_file:    { icon: Code2,     label: 'пишу файл' },
-  edit_file:     { icon: Code2,     label: 'редактирую файл' },
-  list_dir:      { icon: Code2,     label: 'смотрю структуру' },
-  list_tree:     { icon: Code2,     label: 'смотрю структуру' },
-  file_search:   { icon: Search,    label: 'ищу файлы' },
-  grep:          { icon: Search,    label: 'ищу в коде' },
-  search_codebase: { icon: Search,  label: 'ищу по индексу кода' },
-  list_codebase_symbols: { icon: Code2, label: 'смотрю символы' },
-  search_sources: { icon: Search,   label: 'ищу в базе знаний' },
-  list_sources:  { icon: Search,    label: 'смотрю источники' },
-  get_source:    { icon: Search,    label: 'читаю источник' },
-  read_folder_file: { icon: Code2,  label: 'читаю документ KB' },
-  code_run:      { icon: Code2,     label: 'запускаю код' },
-  save_artifact: { icon: Sparkles,  label: 'сохраняю результат' },
-  ask_user:      { icon: MessageCircle, label: 'спрашиваю тебя' },
-  reason:        { icon: Sparkles,  label: 'размышляю' },
+  web_search:    { icon: Search,    label: 'веб' },
+  fetch_page:    { icon: Search,    label: 'страница' },
+  http_request:  { icon: Search,    label: 'запрос' },
+  read_file:     { icon: Code2,     label: 'чтение' },
+  write_file:    { icon: Code2,     label: 'запись' },
+  edit_file:     { icon: Code2,     label: 'правка' },
+  list_dir:      { icon: Code2,     label: 'дерево' },
+  list_tree:     { icon: Code2,     label: 'дерево' },
+  file_search:   { icon: Search,    label: 'файлы' },
+  grep:          { icon: Search,    label: 'grep' },
+  search_codebase: { icon: Search,  label: 'код' },
+  list_codebase_symbols: { icon: Code2, label: 'символы' },
+  search_sources: { icon: Search,   label: 'KB' },
+  list_sources:  { icon: Search,    label: 'источники' },
+  get_source:    { icon: Search,    label: 'источник' },
+  read_folder_file: { icon: Code2,  label: 'документ' },
+  code_run:      { icon: Code2,     label: 'запуск' },
+  save_artifact: { icon: Sparkles,  label: 'артефакт' },
+  ask_user:      { icon: MessageCircle, label: 'вопрос' },
+  reason:        { icon: Sparkles,  label: 'рассуждение' },
+  propose_design: { icon: Sparkles, label: 'дизайн' },
+  runtime_start: { icon: Code2,     label: 'preview' },
+  runtime_logs:  { icon: Code2,     label: 'логи' },
+  runtime_stop:  { icon: Code2,     label: 'стоп' },
 };
 
 /** Backend may send compound actions: "list_tree + grep + read_file". */
@@ -203,7 +207,6 @@ function useTypewriter(text: string, enabled: boolean, speedMs = 35, resetKey?: 
 export function AgentThoughtBubble() {
   const status = useChatStore(s => s.activeTaskStatus);
   const steps = useChatStore(s => s.activeTaskSteps);
-  const question = useChatStore(s => s.activeTaskQuestion);
   const result = useChatStore(s => s.activeTaskResult);
   const error = useChatStore(s => s.activeTaskError);
   const plan = useChatStore(s => s.activeTaskPlan);
@@ -226,25 +229,20 @@ export function AgentThoughtBubble() {
         ? 12
         : status === 'done'
           ? 100
-          : status === 'waiting_input'
-            ? 50
-            : 0;
+          : 0;
 
   let bubbleText = '';
   let bubbleSubtext = '';
-  if (status === 'waiting_input' && question) {
-    bubbleText = question;
-  } else if (status === 'done' && result) {
-    bubbleText = 'Готово';
-    bubbleSubtext = result.split(/[.!?]/)[0].slice(0, 100) + (result.length > 100 ? '…' : '');
+  if (status === 'done' && result) {
+    bubbleText = result.split(/[.!?]/)[0].slice(0, 100) + (result.length > 100 ? '…' : '');
   } else if (status === 'failed' && error) {
-    bubbleText = 'Не получилось';
-    bubbleSubtext = error.slice(0, 100);
+    bubbleText = error.slice(0, 120);
   } else if (status === 'planning') {
+    // Phase badge already says «План» — body is the goal, not another «составляю план».
     const g = plan?.goal ? displayAgentGoal(plan.goal) : '';
-    bubbleText = g ? g.slice(0, 90) : 'Составляю план…';
+    bubbleText = g ? g.slice(0, 100) : '…';
   } else if (status === 'synthesizing') {
-    bubbleText = 'Собираю ответ…';
+    bubbleText = '…';
   } else if (currentStep?.thought) {
     // Skip regurgitated system/template lines in the first sentence.
     const thoughtLine = currentStep.thought
@@ -258,17 +256,18 @@ export function AgentThoughtBubble() {
   } else if (currentStep?.action) {
     bubbleText = describeAction(currentStep.action) ?? currentStep.action;
   } else {
-    bubbleText = 'Работаю над задачей…';
+    bubbleText = '…';
   }
 
-  const useTypewriterEffect = status === 'executing' || status === 'planning';
+  // Typewriter only for live step thoughts — not for static phase filler.
+  const useTypewriterEffect = status === 'executing' && Boolean(currentStep?.thought);
   // UI-H15 fix: reset the typewriter when the step number OR status changes,
   // not when the text changes (which happens on every streaming chunk).
   const typewriterResetKey = `${status}:${currentStep?.step ?? 0}`;
   const typedText = useTypewriter(bubbleText, useTypewriterEffect, 35, typewriterResetKey);
 
-  // Скрываем если задача не активна
-  if (!isActive) return null;
+  // waiting_input — только AgentWaitingPrompt (иначе вопрос дважды).
+  if (!isActive || status === 'waiting_input') return null;
 
   const Icon = phase.icon;
 
@@ -292,7 +291,7 @@ export function AgentThoughtBubble() {
           />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 mb-0.5">
-              <span className={cn('text-[10px] font-medium uppercase tracking-wider', phase.color)}>
+              <span className={cn('text-[10px] font-medium tracking-wide', phase.color)}>
                 {phase.label}
               </span>
               {stepNum > 0 && status === 'executing' && maxSteps > 0 && (
@@ -301,12 +300,14 @@ export function AgentThoughtBubble() {
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-foreground/90 leading-snug line-clamp-2">
-              {typedText}
-              {useTypewriterEffect && typedText !== bubbleText && (
-                <span className="inline-block w-0.5 h-3 bg-current ml-0.5 lia-typewriter-cursor align-middle" />
-              )}
-            </p>
+            {(typedText && typedText !== '…') && (
+              <p className="text-[11px] text-foreground/90 leading-snug line-clamp-2">
+                {typedText}
+                {useTypewriterEffect && typedText !== bubbleText && (
+                  <span className="inline-block w-0.5 h-3 bg-current ml-0.5 lia-typewriter-cursor align-middle" />
+                )}
+              </p>
+            )}
             {bubbleSubtext && (
               <p className="text-[10px] text-text-dim leading-snug mt-0.5 line-clamp-1">
                 {bubbleSubtext}

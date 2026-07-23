@@ -90,17 +90,17 @@ export function SandboxConfirmDialog() {
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Запись в sandbox?</AlertDialogTitle>
+          <AlertDialogTitle>Запись в черновик?</AlertDialogTitle>
           <AlertDialogDescription>
             Режим Правка без привязанной папки или источника KB — агент будет
-            писать в пустой черновик (sandbox), а не в ваш проект. Привяжи
-            workspace в шапке чата или подтверди sandbox.
+            писать в пустой sandbox, а не в ваш проект. Выбери папку в шапке
+            чата или подтверди черновик.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel onClick={discardPending}>Отмена</AlertDialogCancel>
           <AlertDialogAction onClick={() => void onConfirm()}>
-            Продолжить в sandbox
+            Продолжить в черновике
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

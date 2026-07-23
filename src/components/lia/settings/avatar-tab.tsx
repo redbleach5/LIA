@@ -22,7 +22,6 @@ import {
 } from '@/lib/avatar-config';
 import type { Settings } from './types';
 import { ThemePicker } from '../theme-picker';
-import { AvatarGlowControl } from '../avatar-glow-control';
 
 type AvatarTabProps = {
   settings: Settings;
@@ -149,7 +148,6 @@ export function AvatarTab({
   return (
     <div className="space-y-4 min-w-0 overflow-x-hidden">
       <ThemePicker />
-      <AvatarGlowControl />
 
       <hr className="lia-divider" />
 

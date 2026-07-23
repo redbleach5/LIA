@@ -1,16 +1,15 @@
 'use client';
 
-// Workspace Panel — файловый браузер рабочей директории агента (fsScope).
+// Workspace Panel — файлы текущей задачи агента + контекст привязки чата.
 //
-// fsScope задачи: внешний проект, sandbox или (явно) корень Lia.
-// Sandbox — под agent-workspaces/.
-// Пользователь может открыть файл и увидеть содержимое.
-// Обновляется при step_end / polling.
+// «Папка чата» (episode binding) — где Лия работает в этом диалоге.
+// «Файлы задачи» (task fsScope) — дерево, которое агент реально пишет/читает.
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { File, Folder, FolderOpen, RefreshCw, ChevronRight, ChevronDown } from 'lucide-react';
+import { File, Folder, FolderOpen, RefreshCw, ChevronRight, ChevronDown, BookOpen, Box, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useChatStore } from '@/stores/chat-store';
+import type { WorkspaceBinding } from '@/lib/agent/workspace-types';
 
 type TreeNode = {
   name: string;
@@ -22,7 +21,13 @@ type TreeNode = {
 
 type WorkspaceKind = 'project' | 'sandbox' | 'custom' | null;
 
-export function WorkspacePanel({ taskId }: { taskId: string | null }) {
+export function WorkspacePanel({
+  taskId,
+  episodeId,
+}: {
+  taskId: string | null;
+  episodeId?: string | null;
+}) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
@@ -31,11 +36,32 @@ export function WorkspacePanel({ taskId }: { taskId: string | null }) {
   const [kind, setKind] = useState<WorkspaceKind>(null);
   const [label, setLabel] = useState<string | null>(null);
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  const [chatBinding, setChatBinding] = useState<WorkspaceBinding | null>(null);
 
   const activeTaskStatus = useChatStore(s => s.activeTaskStatus);
   const abortRef = useRef<AbortController | null>(null);
   const selectedFileRef = useRef<string | null>(null);
   useEffect(() => { selectedFileRef.current = selectedFile; }, [selectedFile]);
+
+  // Episode-level binding (chat folder) — independent of task tree.
+  useEffect(() => {
+    if (!episodeId) {
+      setChatBinding(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/episodes/${episodeId}/workspace`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json() as { binding: WorkspaceBinding | null };
+        if (!cancelled) setChatBinding(data.binding);
+      } catch {
+        if (!cancelled) setChatBinding(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [episodeId]);
 
   const refresh = useCallback(async () => {
     if (!taskId) return;
@@ -136,12 +162,42 @@ export function WorkspacePanel({ taskId }: { taskId: string | null }) {
     });
   };
 
+  const bindingHint = chatBinding ? (
+    <div className="flex items-start gap-2 rounded-lg border border-border/50 bg-surface-2/40 px-2.5 py-2 mb-2">
+      {chatBinding.kind === 'kb' ? (
+        <BookOpen className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" />
+      ) : chatBinding.kind === 'sandbox' ? (
+        <Box className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" />
+      ) : (
+        <Link2 className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" />
+      )}
+      <div className="min-w-0">
+        <p className="text-[10px] uppercase tracking-wider text-text-dim">Папка чата</p>
+        <p className="text-[11px] text-foreground truncate" title={chatBinding.fsPath ?? chatBinding.label}>
+          {chatBinding.label}
+        </p>
+        <p className="text-[10px] text-text-dim mt-0.5 leading-snug">
+          {chatBinding.kind === 'project' && 'Агент пишет в эту папку на диске.'}
+          {chatBinding.kind === 'kb' && 'Поиск по базе знаний ограничен этим источником.'}
+          {chatBinding.kind === 'sandbox' && 'Черновик: файлы в песочнице, не в исходниках.'}
+        </p>
+      </div>
+    </div>
+  ) : (
+    <div className="rounded-lg border border-dashed border-border/60 px-2.5 py-2 mb-2">
+      <p className="text-[11px] text-foreground">Папка чата не привязана</p>
+      <p className="text-[10px] text-text-dim leading-snug mt-0.5">
+        В шапке чата выбери папку, документ KB или sandbox — тогда агент знает, где работать.
+      </p>
+    </div>
+  );
+
   if (!taskId) {
     return (
-      <div className="px-3 py-4 text-center space-y-1.5">
-        <p className="text-[11px] text-foreground">Нет workspace</p>
-        <p className="text-[10px] text-text-dim leading-snug">
-          Привяжи папку или документ в шапке чата, затем запусти агента — здесь появится дерево файлов.
+      <div className="px-1 py-1">
+        {bindingHint}
+        <p className="text-[10px] text-text-dim text-center py-3">
+          Запусти агента — здесь появится дерево файлов задачи.
         </p>
       </div>
     );
@@ -149,26 +205,29 @@ export function WorkspacePanel({ taskId }: { taskId: string | null }) {
 
   if (!hasWorkspace) {
     return (
-      <div className="px-3 py-4 text-center space-y-1.5">
-        <p className="text-[11px] text-foreground">Нет рабочей директории</p>
-        <p className="text-[10px] text-text-dim leading-snug">
-          {kind === 'sandbox'
-            ? 'Sandbox пуст или ещё не создан. Для правок в проекте привяжи папку в шапке чата.'
-            : 'Нет workspace — привяжи папку или документ в шапке чата (или подтверди sandbox в режиме Правка).'}
+      <div className="px-1 py-1">
+        {bindingHint}
+        <p className="text-[11px] text-foreground text-center mt-1">Файлы задачи пока пусты</p>
+        <p className="text-[10px] text-text-dim leading-snug text-center mt-1 px-2">
+          {kind === 'sandbox' || chatBinding?.kind === 'sandbox'
+            ? 'Sandbox ещё не создан или пуст. После первых правок дерево появится здесь.'
+            : chatBinding
+              ? 'Агент ещё не открыл рабочую директорию — подожди шаг или обнови.'
+              : 'Привяжи папку в шапке или подтверди sandbox в режиме Правка.'}
         </p>
       </div>
     );
   }
 
   const title = kind === 'project'
-    ? 'Проект'
+    ? 'Файлы проекта'
     : kind === 'sandbox'
-      ? 'Песочница'
-      : 'Рабочая папка';
+      ? 'Песочница задачи'
+      : 'Файлы задачи';
   const subtitle = kind === 'project'
     ? (label ? `корень · ${label}` : 'корень репозитория')
     : kind === 'sandbox'
-      ? 'пустой write-sandbox (не исходники)'
+      ? 'временный write-sandbox'
       : (label ?? undefined);
 
   const renderTree = (nodes: TreeNode[], level: number = 0): React.ReactNode => {
@@ -223,6 +282,8 @@ export function WorkspacePanel({ taskId }: { taskId: string | null }) {
 
   return (
     <div className="space-y-2">
+      {bindingHint}
+
       <div className="flex items-center justify-between px-1 gap-2">
         <div className="min-w-0">
           <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -253,7 +314,7 @@ export function WorkspacePanel({ taskId }: { taskId: string | null }) {
               : 'Дерево пусто или недоступно'}
         </div>
       ) : (
-        <div className="max-h-48 overflow-y-auto rounded border border-border">
+        <div className="max-h-56 overflow-y-auto rounded-lg border border-border">
           {renderTree(tree)}
         </div>
       )}
@@ -268,7 +329,7 @@ export function WorkspacePanel({ taskId }: { taskId: string | null }) {
               <RefreshCw className="w-3 h-3 animate-spin text-accent" />
             </div>
           ) : fileContent !== null ? (
-            <pre className="max-h-64 overflow-auto rounded border border-border bg-background p-2 text-[10px] font-mono leading-relaxed">
+            <pre className="max-h-64 overflow-auto rounded-lg border border-border bg-background p-2 text-[10px] font-mono leading-relaxed">
               <code>{fileContent}</code>
             </pre>
           ) : null}

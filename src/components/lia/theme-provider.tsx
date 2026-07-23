@@ -29,7 +29,7 @@ export const THEMES: Array<{ id: LiaTheme; label: string; description: string }>
   {
     id: 'wow',
     label: 'Северное сияние',
-    description: 'Тёмный фон и мягкое свечение — для вечернего настроения.',
+    description: 'Тёмная палитра для вечера — без свечения и орбов.',
   },
 ];
 
@@ -110,24 +110,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       if (body) body.classList.remove('lia-theme-transition');
     }, 320);
   }, [theme, ready]);
-
-  // Инициализация glow intensity при загрузке (для WOW mode)
-  // Сам slider управляет переменной, но при первом рендере нужно установить
-  // значение из localStorage, чтобы не было «вспышки» с дефолтным 60%
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('lia-avatar-glow-intensity');
-      if (saved !== null) {
-        const val = Number.parseInt(saved, 10);
-        if (!Number.isNaN(val) && val >= 0 && val <= 100) {
-          document.documentElement.style.setProperty(
-            '--lia-avatar-glow-intensity',
-            (val / 100).toString(),
-          );
-        }
-      }
-    } catch { /* */ }
-  }, []);
 
   // Cross-tab sync
   useEffect(() => {

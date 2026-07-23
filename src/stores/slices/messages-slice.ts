@@ -9,6 +9,7 @@ import { INITIAL_EMOTION } from './types';
 import type { EpisodesSlice } from './episodes-slice';
 import type { AgentSlice } from './agent-slice';
 import type { HealthSlice } from './health-slice';
+import { deriveEpisodeTitle } from '@/lib/memory/episode-title';
 
 export type PendingSandboxConfirm = {
   goal: string;
@@ -89,14 +90,19 @@ export const createMessagesSlice: StateCreator<
   addMessage: (msg) => set((s) => {
     const preview = truncatePreview(msg.content);
     const episodes = s.currentEpisodeId
-      ? s.episodes.map(e => e.id === s.currentEpisodeId
-        ? {
+      ? s.episodes.map(e => {
+          if (e.id !== s.currentEpisodeId) return e;
+          const title = e.title
+            ?? (msg.role === 'user' ? deriveEpisodeTitle(msg.content) : null)
+            ?? e.title;
+          return {
             ...e,
+            title,
             messageCount: e.messageCount + 1,
             preview: preview || e.preview,
             updatedAt: new Date().toISOString(),
-          }
-        : e)
+          };
+        })
       : s.episodes;
     return { messages: [...s.messages, msg], episodes };
   }),

@@ -195,8 +195,8 @@ export function ChatInput({
                 ? 'Создай чат, чтобы начать…'
                 : isStreaming
                   ? (isAgentMode || isAgent
-                    ? 'Агент работает… Esc — стоп'
-                    : 'Лия отвечает… Esc — стоп')
+                    ? 'Агент · Esc — стоп'
+                    : 'Лия отвечает · Esc — стоп')
                   : isAgent
                     ? 'Опиши многошаговую задачу…'
                     : pendingAttachments.length > 0

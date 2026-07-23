@@ -7,7 +7,7 @@ import 'server-only';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createConnection } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { scrubCommandEnv } from '../tools/run-command';
 import { emitAgentEvent } from '../events';
 import { logger } from '@/lib/logger';
@@ -17,7 +17,7 @@ import type {
   RuntimeSessionSnapshot,
   RuntimeStatus,
 } from './types';
-import { htmlEntryFromPreviewUrl, previewUrlForDesign } from './project-manifest';
+import { htmlEntryFromPreviewUrl, previewUrlForDesign, RESERVED_PREVIEW_PORTS } from './project-manifest';
 import { parseRuntimeScript } from './script-parse';
 import type { ParsedScript } from './script-parse';
 import { normalizeRuntimeScript } from './script-normalize';
@@ -145,6 +145,120 @@ export async function probeLocalPort(port: number, timeoutMs = 600): Promise<boo
   return probePort(port, timeoutMs);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Kill the whole process tree. On Windows `npx`/`cmd` leave orphaned `node serve`
+ * if we only SIGTERM the shell PID — that orphan keeps :5173 and poisons the next task.
+ */
+async function killProcessTree(child: ChildProcess): Promise<void> {
+  const pid = child.pid;
+  if (!pid) return;
+
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolve) => {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      const done = () => resolve();
+      killer.on('exit', done);
+      killer.on('error', done);
+      setTimeout(done, 4000);
+    });
+    return;
+  }
+
+  try {
+    child.kill('SIGTERM');
+  } catch {
+    /* ignore */
+  }
+  await sleep(800);
+  try {
+    if (!child.killed && child.exitCode == null) child.kill('SIGKILL');
+  } catch {
+    /* ignore */
+  }
+}
+
+async function waitPortFree(port: number, timeoutMs = 4000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await probeLocalPort(port, 200))) return true;
+    await sleep(150);
+  }
+  return !(await probeLocalPort(port, 200));
+}
+
+/** Stop every supervised runtime that holds this port (except the given task). */
+async function stopSessionsOnPort(port: number, exceptTaskId: string): Promise<void> {
+  const sessions = [...getSessions().values()];
+  for (const s of sessions) {
+    if (s.taskId === exceptTaskId) continue;
+    if (s.port !== port) continue;
+    if (!s.child && s.status !== 'healthy' && s.status !== 'running' && s.status !== 'starting') {
+      continue;
+    }
+    logger.info('agent', 'stopping prior runtime on shared preview port', {
+      port,
+      priorTaskId: s.taskId.slice(0, 8),
+      forTaskId: exceptTaskId.slice(0, 8),
+    });
+    await stopRuntime(s.taskId);
+  }
+}
+
+async function findFreePreviewPort(preferred: number): Promise<number> {
+  const start = Number.isFinite(preferred) && preferred >= 1024 ? preferred : 5173;
+  for (let i = 0; i < 60; i++) {
+    const port = start + i;
+    if (port > 65535) break;
+    if (RESERVED_PREVIEW_PORTS.has(port)) continue;
+    // createServer is more reliable than a failed connect race
+    const free = await new Promise<boolean>((resolve) => {
+      const server = createServer();
+      server.once('error', () => resolve(false));
+      server.listen(port, '127.0.0.1', () => {
+        server.close(() => resolve(true));
+      });
+    });
+    if (free) return port;
+  }
+  return start;
+}
+
+function rewritePreviewPort(url: string | null | undefined, port: number): string | null {
+  if (!url) return `http://127.0.0.1:${port}/`;
+  try {
+    const u = new URL(url);
+    u.port = String(port);
+    return u.toString();
+  } catch {
+    return `http://127.0.0.1:${port}/`;
+  }
+}
+
+/** Bust browser/iframe cache — same origin+path across sandboxes otherwise sticks. */
+function withPreviewCacheBust(
+  url: string | null,
+  taskId: string,
+  ts: number,
+): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    u.searchParams.set('lia', taskId.slice(0, 8));
+    u.searchParams.set('t', String(ts));
+    return u.toString();
+  } catch {
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}lia=${taskId.slice(0, 8)}&t=${ts}`;
+  }
+}
+
 function sessionSpawnFailed(session: Session): boolean {
   if (session.status === 'error' || session.status === 'stopped') return true;
   if (!session.child) return true;
@@ -180,7 +294,7 @@ export async function assertHtmlPreviewEntryExists(
 async function waitHealthy(session: Session): Promise<boolean> {
   if (!session.port) {
     // No port — treat as healthy if process still alive after short settle
-    await new Promise(r => setTimeout(r, 800));
+    await sleep(800);
     if (session.child && !session.child.killed && session.status !== 'stopped' && session.status !== 'error') {
       setStatus(session, 'running');
       return true;
@@ -205,6 +319,16 @@ async function waitHealthy(session: Session): Promise<boolean> {
     return false;
   }
 
+  // Port responds but OUR child already died → leftover process from a prior task.
+  if (sessionSpawnFailed(session)) {
+    const err =
+      `Порт ${session.port} отвечает, но процесс этой задачи уже завершился — `
+      + `вероятно чужой leftover serve (предыдущий preview). Останови старый процесс или смени порт.`;
+    setStatus(session, 'unhealthy', err);
+    pushLog(session, 'system', err);
+    return false;
+  }
+
   // 2) For iframe preview — GET / must return 2xx/3xx (not just open port)
   const url = session.previewUrl || `http://127.0.0.1:${session.port}/`;
   const http = await probeHttpUrl(url, {
@@ -213,6 +337,14 @@ async function waitHealthy(session: Session): Promise<boolean> {
   });
   if (!http.ok) {
     const err = `Preview ${url} не готов: ${http.error ?? 'no response'}`;
+    setStatus(session, 'unhealthy', err);
+    pushLog(session, 'system', err);
+    return false;
+  }
+
+  // Re-check child after HTTP — stale port can answer while our spawn failed.
+  if (sessionSpawnFailed(session)) {
+    const err = `Preview ${url} ответил, но процесс задачи упал — не помечаем healthy`;
     setStatus(session, 'unhealthy', err);
     pushLog(session, 'system', err);
     return false;
@@ -276,7 +408,36 @@ export type StartRuntimeResult = {
 };
 
 export async function startRuntime(input: StartRuntimeInput): Promise<StartRuntimeResult> {
-  const script = normalizeRuntimeScript(input.script, input.port ?? undefined);
+  let preferredPort = input.port ?? 5173;
+  if (RESERVED_PREVIEW_PORTS.has(preferredPort) || preferredPort < 1024) {
+    preferredPort = 5173;
+  }
+
+  // Free the port among supervised sessions (previous task often leaves :5173 up).
+  await stopSessionsOnPort(preferredPort, input.taskId);
+
+  let port = preferredPort;
+  if (await probeLocalPort(preferredPort, 250)) {
+    // Still occupied after stopping our sessions — orphan or foreign process.
+    await waitPortFree(preferredPort, 1500);
+  }
+  if (await probeLocalPort(preferredPort, 250)) {
+    port = await findFreePreviewPort(preferredPort + 1);
+    logger.info('agent', 'preview port busy — using free port', {
+      taskId: input.taskId.slice(0, 8),
+      wanted: preferredPort,
+      using: port,
+    });
+  }
+
+  const startedAt = Date.now();
+  const script = normalizeRuntimeScript(input.script, port);
+  const previewUrl = withPreviewCacheBust(
+    rewritePreviewPort(input.previewUrl, port),
+    input.taskId,
+    startedAt,
+  );
+
   const parsed = parseRuntimeScript(script);
   if (!parsed.ok) {
     return {
@@ -289,20 +450,20 @@ export async function startRuntime(input: StartRuntimeInput): Promise<StartRunti
     };
   }
 
-  const entryCheck = await assertHtmlPreviewEntryExists(input.cwd, input.previewUrl ?? null);
+  const entryCheck = await assertHtmlPreviewEntryExists(input.cwd, previewUrl);
   if (!entryCheck.ok) {
     const session = ensureSession(input.taskId);
     session.cwd = input.cwd;
-    session.port = input.port ?? null;
-    session.previewUrl = input.previewUrl ?? null;
+    session.port = port;
+    session.previewUrl = previewUrl;
     setStatus(session, 'error', entryCheck.error);
     pushLog(session, 'system', entryCheck.error);
     return {
       success: false,
       status: 'error',
       error: entryCheck.error,
-      port: input.port ?? null,
-      previewUrl: input.previewUrl ?? null,
+      port,
+      previewUrl,
       restartCount: session.restartCount,
     };
   }
@@ -326,8 +487,8 @@ export async function startRuntime(input: StartRuntimeInput): Promise<StartRunti
   session.scriptKey = input.scriptKey;
   session.command = parsed.command;
   session.args = parsed.args;
-  session.port = input.port ?? null;
-  session.previewUrl = input.previewUrl ?? null;
+  session.port = port;
+  session.previewUrl = previewUrl;
   session.restartCount += session.startedAt ? 1 : 0;
   if (session.restartCount > MAX_RESTARTS) {
     const err = `Превышен лимит перезапусков (${MAX_RESTARTS})`;
@@ -336,12 +497,12 @@ export async function startRuntime(input: StartRuntimeInput): Promise<StartRunti
   }
 
   session.killing = false;
-  session.startedAt = Date.now();
+  session.startedAt = startedAt;
   setStatus(session, 'starting', null);
   pushLog(
     session,
     'system',
-    `Starting: ${parsed.command} ${parsed.args.join(' ')} (cwd=${input.cwd})`,
+    `Starting: ${parsed.command} ${parsed.args.join(' ')} (cwd=${input.cwd}, port=${port})`,
   );
 
   try {
@@ -362,7 +523,7 @@ export async function startRuntime(input: StartRuntimeInput): Promise<StartRunti
   }
 
   // Let spawn 'error' fire before we start waiting on the port.
-  await new Promise(r => setTimeout(r, 50));
+  await sleep(50);
   if (sessionSpawnFailed(session) && session.lastError) {
     return {
       success: false,
@@ -419,27 +580,26 @@ export async function stopRuntime(taskId: string): Promise<{ success: boolean; s
 
   session.killing = true;
   const child = session.child;
-  if (child && !child.killed) {
+  const port = session.port;
+  if (child) {
     pushLog(session, 'system', 'Stopping runtime…');
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      /* ignore */
-    }
-    // Force kill after grace
-    await new Promise(r => setTimeout(r, 800));
-    if (session.child && !session.child.killed) {
-      try {
-        session.child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
-    }
+    await killProcessTree(child);
   }
   session.child = null;
+  if (port != null) {
+    await waitPortFree(port, 2500);
+  }
   setStatus(session, 'stopped');
   logger.info('agent', 'runtime stopped', { taskId: taskId.slice(0, 8) });
   return { success: true, status: 'stopped' };
+}
+
+/** Stop every supervised runtime (e.g. before a new agent task claims preview). */
+export async function stopAllRuntimes(): Promise<void> {
+  const ids = [...getSessions().keys()];
+  for (const id of ids) {
+    await stopRuntime(id);
+  }
 }
 
 export function getRuntimeLogs(taskId: string, limit = 80): RuntimeLogLine[] {

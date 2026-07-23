@@ -18,6 +18,10 @@ export async function persistAgentGoalToChat(
   if (!text) return null;
   try {
     const msg = await saveMessage(episodeId, { role: 'user', content: text });
+    const { autoTitleEpisode } = await import('@/lib/memory/episodes');
+    autoTitleEpisode(episodeId, text).catch((e) => {
+      logger.warn('agent', 'autoTitleEpisode failed (non-fatal)', { episodeId: episodeId.slice(0, 8) }, e);
+    });
     return msg.id;
   } catch (e) {
     logger.warn('agent', 'Failed to persist agent goal to chat', { episodeId: episodeId.slice(0, 8) }, e);

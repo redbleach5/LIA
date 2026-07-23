@@ -44,8 +44,8 @@ export function AgentWaitingPrompt() {
     <div className="pointer-events-auto mx-3 mb-2 rounded-xl border border-warning/40 bg-warning/8 backdrop-blur-sm p-3 shadow-lg lia-bubble-enter">
       <div className="flex items-center gap-1.5 mb-2">
         <AlertCircle className="w-3.5 h-3.5 text-warning shrink-0" />
-        <span className="text-[10px] uppercase tracking-wider text-warning font-medium">
-          Лия ждёт ответ
+        <span className="text-[10px] font-medium tracking-wide text-warning">
+          Вопрос
         </span>
       </div>
       <p className="text-xs text-foreground/90 leading-relaxed mb-2">{question}</p>
