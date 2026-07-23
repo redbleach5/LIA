@@ -2,6 +2,7 @@
 
 import { useCallback } from 'react';
 import { useChatStore, type AgentTask } from '@/stores/chat-store';
+import { hasAgentShellRiskAck } from '@/lib/agent/shell-risk-ack';
 import { toast } from 'sonner';
 
 export function useAgent() {
@@ -37,6 +38,27 @@ export function useAgent() {
     if (!state.currentEpisodeId) return null;
     try {
       const workspaceMode = params.workspaceMode ?? state.agentWorkspaceMode;
+
+      if (!hasAgentShellRiskAck()) {
+        const userMsgId = crypto.randomUUID();
+        useChatStore.getState().addMessage({
+          id: userMsgId,
+          role: 'user',
+          content: params.goal,
+          createdAt: Date.now(),
+        });
+        state.setPendingShellRiskAck({
+          goal: params.goal,
+          workspaceMode,
+          userMessageId: userMsgId,
+          source: 'panel',
+          template: params.template,
+          confirmSandbox: params.confirmSandbox,
+          forceAgent: true,
+        });
+        return null;
+      }
+
       const res = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

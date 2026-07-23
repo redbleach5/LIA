@@ -1,11 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Shield, Zap, RotateCcw } from 'lucide-react';
 import { useChatStore } from '@/stores/chat-store';
 import { isAgentBusyStatus, agentWorkbenchSummary } from '@/lib/agent/task-status-ui';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+
+const STALE_PROGRESS_MS = 5 * 60 * 1000;
 
 /**
  * Sticky mini-bar over composer while an agent turn is busy:
@@ -22,8 +24,27 @@ export function AgentStickyBar() {
   const executor = useChatStore(s => s.activeTaskExecutor);
   const markUndoneMany = useChatStore(s => s.markActiveTaskFileChangesUndone);
   const [rollbackBusy, setRollbackBusy] = useState(false);
+  const [staleProgress, setStaleProgress] = useState(false);
 
   const busy = isAgentBusyStatus(status);
+
+  // Soft hint when no new steps for ≥5 min (watchdog is still 30 min).
+  // Skip waiting_input — progress is blocked on the user, not a hang.
+  useEffect(() => {
+    if (!busy || !activeTaskId || status === 'waiting_input') {
+      setStaleProgress(false);
+      return;
+    }
+    const lastTs = steps.reduce((max, s) => Math.max(max, s.ts || 0), 0);
+    const startedAt = lastTs > 0 ? lastTs : Date.now();
+    const check = () => {
+      setStaleProgress(Date.now() - startedAt >= STALE_PROGRESS_MS);
+    };
+    check();
+    const id = setInterval(check, 15_000);
+    return () => clearInterval(id);
+  }, [busy, activeTaskId, status, steps]);
+
   if (!activeTaskId || !busy) return null;
 
   const isClaudeCode = executor === 'claude_code';
@@ -67,9 +88,21 @@ export function AgentStickyBar() {
   return (
     <div className="border-t border-border/60 bg-surface/90 backdrop-blur-sm px-5 py-1.5 shrink-0">
       <div className="lia-chat-rail flex items-center gap-2 min-w-0">
-        <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse shrink-0" aria-hidden />
-        <span className="text-[11px] text-text-muted truncate flex-1 min-w-0" title={summary}>
-          {summary}
+        <span
+          className={cn(
+            'w-1.5 h-1.5 rounded-full shrink-0',
+            staleProgress ? 'bg-amber-400' : 'bg-accent animate-pulse',
+          )}
+          aria-hidden
+        />
+        <span
+          className={cn(
+            'text-[11px] truncate flex-1 min-w-0',
+            staleProgress ? 'text-amber-200/90' : 'text-text-muted',
+          )}
+          title={staleProgress ? 'Долго без прогресса — можно остановить (Esc)' : summary}
+        >
+          {staleProgress ? 'Долго без прогресса — можно остановить (Esc)' : summary}
         </span>
         {!isClaudeCode && (
         <button

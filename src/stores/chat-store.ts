@@ -45,7 +45,11 @@ export type {
   AgentWorkspaceModeInput,
 } from './slices/types';
 
-export type { PendingSandboxConfirm, PendingAgentRouteConfirm } from './slices/messages-slice';
+export type {
+  PendingSandboxConfirm,
+  PendingAgentRouteConfirm,
+  PendingShellRiskAck,
+} from './slices/messages-slice';
 
 type ChatStore = EpisodesSlice & MessagesSlice & AgentSlice & HealthSlice;
 

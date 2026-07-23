@@ -10,6 +10,10 @@ export type ClaudeCodePromptInput = {
   /** Repo rules + @mentions block (already formatted), or empty. */
   workspaceContext?: string;
   fsScope: string;
+  /** Prior coding brief (operational). */
+  brief?: string;
+  /** Planned steps / target files from Lia pre-plan. */
+  planHint?: string;
 };
 
 /**
@@ -20,6 +24,12 @@ export function buildClaudeCodeUserPrompt(input: ClaudeCodePromptInput): string 
   const goal = displayAgentGoal(input.goal).trim();
   const parts: string[] = [];
   if (goal) parts.push(goal);
+
+  const brief = (input.brief ?? '').trim();
+  if (brief) parts.push(brief);
+
+  const planHint = (input.planHint ?? '').trim();
+  if (planHint) parts.push(planHint);
 
   const ctx = (input.workspaceContext ?? '').trim();
   if (ctx) {
@@ -36,6 +46,7 @@ export function buildClaudeCodeUserPrompt(input: ClaudeCodePromptInput): string 
       `- Work only inside this workspace (cwd): ${input.fsScope}`,
       '- Do not force-push or git reset --hard.',
       '- Prefer minimal targeted edits.',
+      '- First understand structure (list/read), then edit; list files you will change.',
       '- When finished, print a short summary of files changed.',
     ].join('\n'),
   );

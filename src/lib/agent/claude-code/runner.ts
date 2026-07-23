@@ -179,23 +179,31 @@ export async function runClaudeCodeTask(
     });
     emitAgentEvent({ type: 'task_planning', taskId, ts: Date.now() });
 
-    const plan = {
-      goal: `Claude Code · ${model}`,
-      steps: [
-        'Запуск Claude Code в workspace',
-        'Правки файлов',
-        'Краткий итог',
-      ],
-      complexity: 'medium',
-    };
+    // Lia pre-plan (operational JSON) — replaces cosmetic stub.
+    const { fingerprintFromFsScope, mergeTargetFiles, buildCodingTaskBrief } =
+      await import('../coding-intent');
+    const { loadCodingBriefPromptBlock, saveCodingTaskBrief } = await import('../coding-brief');
+    const { upsertWorkspaceMemoryFact, listWorkspaceMemory } = await import('../workspace-memory');
+    const { generatePlan } = await import('../runner-helpers');
+
+    const ccToolDescriptions = [
+      'write_file / write_files — создать или перезаписать файлы',
+      'edit_file — точечная правка',
+      'read_file / list_tree / grep — исследование',
+      'run_command — тесты/git (без force push / --hard)',
+    ].join('\n');
+
+    let plan = await generatePlan(task, ccToolDescriptions, opts.abortSignal);
+    const briefBlock = await loadCodingBriefPromptBlock(task.fsScope);
     await updateAgentTask(taskId, { planJson: JSON.stringify(plan) });
     emitAgentEvent({
       type: 'task_plan_ready',
       taskId,
       plan: {
-        goal: plan.goal,
+        goal: displayAgentGoal(plan.goal) || displayAgentGoal(task.goal),
         steps: plan.steps,
         complexity: plan.complexity,
+        targetFiles: plan.targetFiles ?? [],
       },
       executor: 'claude_code',
       ts: Date.now(),
@@ -207,10 +215,32 @@ export async function runClaudeCodeTask(
       goal: task.goal,
       fsScope: task.fsScope,
     });
+
+    const planHint = [
+      'Lia plan (follow unless better paths found):',
+      ...plan.steps.slice(0, 12).map((s, i) => `${i + 1}. ${s}`),
+      plan.targetFiles?.length
+        ? `Likely files: ${plan.targetFiles.slice(0, 16).join(', ')}`
+        : '',
+    ].filter(Boolean).join('\n');
+
+    // Best-effort resume of prior CC session in this workspace.
+    let resumeSessionId: string | undefined;
+    const fp = fingerprintFromFsScope(task.fsScope);
+    if (fp) {
+      try {
+        const facts = await listWorkspaceMemory(fp);
+        resumeSessionId = facts.find((f) => f.shortKey === 'coding.ccSessionId')?.value?.trim()
+          || undefined;
+      } catch { /* ignore */ }
+    }
+
     const prompt = buildClaudeCodeUserPrompt({
       goal: task.goal,
-      workspaceContext: workspaceContext,
+      workspaceContext,
       fsScope: task.fsScope,
+      brief: briefBlock || undefined,
+      planHint,
     });
 
     await updateAgentTask(taskId, { status: 'executing', currentStep: 1 });
@@ -220,6 +250,7 @@ export async function runClaudeCodeTask(
     let resultText = '';
     let resultOk = true;
     let stderrBuf = '';
+    let ccSessionId: string | undefined;
 
     const emitTool = (tool: string, input: unknown) => {
       emitAgentEvent({
@@ -261,6 +292,7 @@ export async function runClaudeCodeTask(
         } else if (ev.kind === 'result') {
           resultText = ev.text || resultText;
           resultOk = ev.success;
+          if (ev.sessionId) ccSessionId = ev.sessionId;
         }
       }
     };
@@ -284,6 +316,7 @@ export async function runClaudeCodeTask(
       onStderr: (c) => {
         stderrBuf = (stderrBuf + c).slice(-8_000);
       },
+      resumeSessionId,
     });
 
     const pid = spawnResult.pid;
@@ -326,6 +359,25 @@ export async function runClaudeCodeTask(
         ts: Date.now(),
       });
     }
+
+    const mergedFiles = mergeTargetFiles(
+      plan.targetFiles ?? [],
+      diffs.map((d) => d.path),
+    );
+    plan = { ...plan, targetFiles: mergedFiles };
+    await updateAgentTask(taskId, { planJson: JSON.stringify(plan) });
+
+    if (fp && ccSessionId) {
+      await upsertWorkspaceMemoryFact(fp, 'coding.ccSessionId', ccSessionId.slice(0, 120), 0.85)
+        .catch(() => null);
+    }
+
+    const brief = buildCodingTaskBrief({
+      goal: displayAgentGoal(task.goal),
+      summary: resultText || (resultOk ? 'Claude Code ok' : 'Claude Code error'),
+      files: mergedFiles,
+    });
+    await saveCodingTaskBrief(task.fsScope, brief);
 
     await updateAgentTask(taskId, { status: 'synthesizing' });
     emitAgentEvent({ type: 'task_synthesizing', taskId, ts: Date.now() });

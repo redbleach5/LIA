@@ -69,11 +69,12 @@ export const AGENT_TEMPLATES: Record<AgentTemplateName, AgentTemplate> = {
 - Полный рабочий код, не заглушки
 - Locked static preset: только index.html, style.css, script.js
 - Не зацикливайся на read_file
-- edit_file для правок; много файлов — отдельные write_file
+- edit_file для правок; связанные файлы — write_files (batch) или несколько write_file в одном шаге
 - Зависимости указывай только если preset их требует (vite-react / node-api)`,
     toolWhitelist: [
       'propose_design',
       'write_file',
+      'write_files',
       'edit_file',
       'read_file',
       'list_dir',

@@ -144,6 +144,12 @@ export const AgentMessageParts = memo(function AgentMessageParts({
                 <ol className="list-decimal pl-3.5 space-y-0.5 text-text-muted leading-snug">
                   {p.steps.map((s, i) => <li key={i}>{s}</li>)}
                 </ol>
+                {p.targetFiles && p.targetFiles.length > 0 && (
+                  <div className="mt-1 text-[10px] text-text-dim/90 font-mono break-all">
+                    Файлы: {p.targetFiles.slice(0, 12).join(' · ')}
+                    {p.targetFiles.length > 12 ? ` +${p.targetFiles.length - 12}` : ''}
+                  </div>
+                )}
               </div>
             );
           case 'text':

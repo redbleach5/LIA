@@ -17,7 +17,7 @@ export type AgentEvent =
   | {
       type: 'task_plan_ready';
       taskId: string;
-      plan: { goal: string; steps: string[]; complexity: string };
+      plan: { goal: string; steps: string[]; complexity: string; targetFiles?: string[] };
       executor?: AgentExecutorKind;
       ts: number;
       eventId?: string;

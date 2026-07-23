@@ -85,6 +85,7 @@ export type AgentPlanLive = {
   goal: string;
   steps: string[];
   complexity: string;
+  targetFiles?: string[];
 };
 
 export type ProjectDesignLive = {

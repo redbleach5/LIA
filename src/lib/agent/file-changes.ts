@@ -100,6 +100,11 @@ export function listPendingChanges(taskId: string): FileChangeRecord[] {
   return (getStore().get(taskId) ?? []).filter((c) => c.status === 'pending');
 }
 
+/** All file-change records for a task (pending + applied + rejected). */
+export function listTaskFileChanges(taskId: string): FileChangeRecord[] {
+  return [...(getStore().get(taskId) ?? [])];
+}
+
 /**
  * Propose (ask) or apply (auto) a file edit.
  * Does NOT write in ask mode — stores proposedContent.

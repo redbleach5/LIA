@@ -5,6 +5,7 @@ import {
   RUN_COMMAND_ALLOWED,
   GIT_ALLOWED_SUBCOMMANDS,
 } from '@/lib/agent/tools/run-command';
+import { isDangerousPackageCommand } from '@/lib/agent/command-sanitize';
 
 describe('run_command validation', () => {
   it('allows bun/npm/git from allowlist', () => {
@@ -54,6 +55,11 @@ describe('run_command validation', () => {
   it('exports non-empty allowlists', () => {
     expect(RUN_COMMAND_ALLOWED.has('bun')).toBe(true);
     expect(GIT_ALLOWED_SUBCOMMANDS.has('status')).toBe(true);
+  });
+
+  it('marks package install as dangerous but not bun run test', () => {
+    expect(isDangerousPackageCommand('npm', ['install', 'left-pad'])).toBe(true);
+    expect(isDangerousPackageCommand('bun', ['run', 'test:ci'])).toBe(false);
   });
 
   it('executes node -e inside fsScope', async () => {

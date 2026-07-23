@@ -72,3 +72,20 @@ export function formatAgentStepHistory(
 
   return parts.join('\n\n');
 }
+
+const FILE_CHANGES_DIGEST_CAP = 1000;
+
+/** Compact list of files touched this task (for execute context). */
+export function formatFileChangesDigest(
+  changes: Array<{ path: string; tool: string; status: string }>,
+  cap = FILE_CHANGES_DIGEST_CAP,
+): string {
+  if (!changes.length) return '';
+  const lines = changes.slice(0, 40).map((c) => {
+    const op = c.tool === 'edit_file' ? 'edit' : 'write';
+    return `- ${op} ${c.path} (${c.status})`;
+  });
+  let block = `Файлы этой задачи (уже записаны/предложены):\n${lines.join('\n')}`;
+  if (block.length > cap) block = `${block.slice(0, cap - 1)}…`;
+  return block;
+}

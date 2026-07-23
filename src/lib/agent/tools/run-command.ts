@@ -20,11 +20,16 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { AgentTask } from '../task';
 import { resolveScopedPath } from '../fs-helpers';
-import { sanitizeCommandArgs, sanitizePackageManagerArgs } from '../command-sanitize';
+import {
+  sanitizeCommandArgs,
+  sanitizePackageManagerArgs,
+  isDangerousPackageCommand,
+} from '../command-sanitize';
 import { emitAgentEvent } from '../events';
 import { getTaskApplyMode } from '../file-changes';
 import { resolvePermissionTier, shellNeedsPermission } from '../permission-tiers';
 import { waitForUserInput } from '../wait-input';
+import { logger } from '@/lib/logger';
 
 const execFileAsync = promisify(execFile);
 
@@ -184,7 +189,11 @@ export function makeRunCommandTool(task: AgentTask) {
 
       const applyMode = getTaskApplyMode(task.id);
       const tier = resolvePermissionTier('edit', applyMode);
-      if (shellNeedsPermission(tier)) {
+      // install/ci always ask (even edit-auto); other shell only in edit-ask.
+      const needsAsk =
+        isDangerousPackageCommand(validated.command, validated.args)
+        || shellNeedsPermission(tier);
+      if (needsAsk) {
         emitAgentEvent({
           type: 'permission_request',
           taskId: task.id,

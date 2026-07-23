@@ -87,6 +87,16 @@ export async function logServerStartup(): Promise<void> {
   }
 
   try {
+    const { sweepOrphanRuntimes } = await import('./agent/runtime/orphan-pids');
+    const orphans = await sweepOrphanRuntimes();
+    if (orphans > 0) {
+      logger.info('system', `Swept ${orphans} orphan runtime pid file(s) on startup`);
+    }
+  } catch (e) {
+    logger.warn('system', 'sweepOrphanRuntimes failed on startup (non-fatal)', {}, e);
+  }
+
+  try {
     const { sweepStaleKbSources } = await import('./kb/indexer');
     const kbSwept = await sweepStaleKbSources();
     if (kbSwept > 0) {

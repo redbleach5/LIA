@@ -35,7 +35,10 @@ export async function buildMentionAndRulesContext(params: {
       const chunk = await loadMention(params.fsScope, m, params.goal);
       if (chunk) parts.push(chunk);
     } catch (e) {
-      logger.debug('agent', 'mention load failed', { path: m.path }, e);
+      logger.debug('agent', 'mention load failed', {
+        path: m.path,
+        err: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 

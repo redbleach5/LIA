@@ -18,6 +18,7 @@ import { isOpenOrShowArtifactGoal, isFixOrDebugArtifactGoal } from '@/lib/agent/
 import { beginChatStream, endChatStream } from '@/lib/chat/client-stream-control';
 import { parseStreamErrorPayload } from '@/lib/chat/stream-error';
 import { isAgentBusyStatus } from '@/lib/agent/task-status-ui';
+import { hasAgentShellRiskAck } from '@/lib/agent/shell-risk-ack';
 import { cueAvatarGesture, cueAvatarLook } from '@/lib/avatar-cues';
 import { toast } from 'sonner';
 
@@ -135,6 +136,10 @@ export function useChat() {
       toast.info('Сначала выбери: диалог или агент.');
       return;
     }
+    if (state.pendingShellRiskAck) {
+      toast.info('Сначала подтверди предупреждение об агенте.');
+      return;
+    }
 
     const uiMode = normalizeChatMode(mode);
     let effectiveMode: ChatMode = uiMode;
@@ -195,6 +200,19 @@ export function useChat() {
           createdAt: Date.now(),
         };
         useChatStore.getState().addMessage(userMsg);
+
+        if (!hasAgentShellRiskAck()) {
+          useChatStore.getState().setPendingShellRiskAck({
+            goal: trimmed,
+            workspaceMode: useChatStore.getState().agentWorkspaceMode,
+            userMessageId: userMsg.id,
+            source: 'chat',
+            forceAgent: skipGate,
+          });
+          agentCreateInFlightRef.current = false;
+          setAgentCreating(false);
+          return;
+        }
 
         try {
           const workspaceMode = useChatStore.getState().agentWorkspaceMode;

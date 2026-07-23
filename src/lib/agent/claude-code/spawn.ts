@@ -20,6 +20,8 @@ export type SpawnClaudeCodeOpts = {
   onStderr: (chunk: string) => void;
   /** Grace after stream `result` before SIGTERM (default CC_AFTER_RESULT_GRACE_MS). */
   afterResultGraceMs?: number;
+  /** Resume prior Claude Code session when CLI supports --resume. */
+  resumeSessionId?: string;
 };
 
 export type SpawnClaudeCodeResult = {
@@ -71,6 +73,9 @@ export async function spawnClaudeCode(
   ];
   if (opts.model.trim()) {
     args.push('--model', opts.model.trim());
+  }
+  if (opts.resumeSessionId?.trim()) {
+    args.push('--resume', opts.resumeSessionId.trim());
   }
 
   logger.info('agent', 'Claude Code spawn', {

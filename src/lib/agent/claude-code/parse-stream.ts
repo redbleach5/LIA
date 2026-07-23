@@ -7,7 +7,7 @@ export type ParsedCcEvent =
   | { kind: 'assistant_delta'; text: string }
   | { kind: 'tool_start'; tool: string; input: unknown }
   | { kind: 'tool_end'; tool: string; success: boolean; output: unknown }
-  | { kind: 'result'; text: string; success: boolean }
+  | { kind: 'result'; text: string; success: boolean; sessionId?: string }
   | { kind: 'ignore' };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -89,7 +89,16 @@ export function parseClaudeCodeStreamLine(line: string): ParsedCcEvent {
       || (typeof obj.text === 'string' && obj.text)
       || '';
     const success = obj.is_error !== true && obj.subtype !== 'error';
-    return { kind: 'result', text: String(text), success };
+    const sessionId =
+      (typeof obj.session_id === 'string' && obj.session_id)
+      || (typeof obj.sessionId === 'string' && obj.sessionId)
+      || undefined;
+    return {
+      kind: 'result',
+      text: String(text),
+      success,
+      ...(sessionId ? { sessionId } : {}),
+    };
   }
 
   // Fallback: plain text field

@@ -22,6 +22,10 @@ import { parseRuntimeScript } from './script-parse';
 import type { ParsedScript } from './script-parse';
 import { normalizeRuntimeScript } from './script-normalize';
 import { probeHttpUrl } from './health';
+import {
+  clearRuntimePid,
+  persistRuntimePid,
+} from './orphan-pids';
 
 export type { ParsedScript };
 export { parseRuntimeScript };
@@ -357,6 +361,15 @@ async function waitHealthy(session: Session): Promise<boolean> {
 
 function attachChild(session: Session, child: ChildProcess) {
   session.child = child;
+  const pid = child.pid;
+  if (pid) {
+    void persistRuntimePid({
+      taskId: session.taskId,
+      pid,
+      port: session.port,
+      startedAt: session.startedAt ?? Date.now(),
+    });
+  }
   child.stdout?.on('data', (buf: Buffer) => {
     const text = buf.toString('utf8');
     for (const line of text.split(/\r?\n/)) {
@@ -376,6 +389,7 @@ function attachChild(session: Session, child: ChildProcess) {
   });
   child.on('exit', (code, signal) => {
     session.child = null;
+    void clearRuntimePid(session.taskId);
     if (session.killing) {
       setStatus(session, 'stopped');
       return;
@@ -590,6 +604,7 @@ export async function stopRuntime(taskId: string): Promise<{ success: boolean; s
     await killProcessTree(child);
   }
   session.child = null;
+  await clearRuntimePid(taskId);
   if (port != null) {
     await waitPortFree(port, 2500);
   }

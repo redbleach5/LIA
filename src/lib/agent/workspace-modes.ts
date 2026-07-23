@@ -37,6 +37,7 @@ export const EXPLORE_TOOLS = [
 export const EDIT_TOOLS = [
   ...EXPLORE_TOOLS,
   'write_file',
+  'write_files',
   'edit_file',
   'run_command',
   'code_run',

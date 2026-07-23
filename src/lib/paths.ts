@@ -36,6 +36,8 @@ export const PATHS = {
   db: path.join(PROJECT_ROOT, 'db'),
   dbFile: path.join(PROJECT_ROOT, 'db', 'custom.db'),
   artifacts: path.join(PROJECT_ROOT, 'download', 'lia-artifacts'),
+  /** Create Runtime PID files — survive Next process restart for orphan sweep. */
+  runtimePids: path.join(PROJECT_ROOT, 'download', 'lia-runtime-pids'),
   public: path.join(PROJECT_ROOT, 'public'),
   publicModels: path.join(PROJECT_ROOT, 'public', 'models'),
   logs: path.join(PROJECT_ROOT, 'logs'),

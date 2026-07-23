@@ -69,3 +69,25 @@ export function sanitizePackageManagerArgs(
   }
   return base;
 }
+
+const PKG_BINS = new Set(['npm', 'npx', 'bun', 'yarn', 'pnpm']);
+
+/** Subcommands that pull/network-install packages (postinstall risk). */
+const DANGEROUS_PKG_SUB = new Set(['install', 'ci', 'i']);
+
+/**
+ * True for package-manager install/ci (and short `i` / yarn|pnpm `add`).
+ * `bun run test` / `npm test` / `git …` / generic `npx …` are NOT dangerous.
+ */
+export function isDangerousPackageCommand(bin: string, args: string[]): boolean {
+  const b = bin.trim().toLowerCase();
+  if (!PKG_BINS.has(b)) return false;
+
+  const sub = args.find(a => a.length > 0 && !a.startsWith('-'));
+  if (!sub) return false;
+  const s = sub.toLowerCase();
+  if (DANGEROUS_PKG_SUB.has(s)) return true;
+  // yarn/pnpm: `add` is install-equivalent
+  if ((b === 'yarn' || b === 'pnpm') && s === 'add') return true;
+  return false;
+}

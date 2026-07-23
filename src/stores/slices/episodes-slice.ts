@@ -47,6 +47,7 @@ export const createEpisodesSlice: StateCreator<
       messagesLoadingOlder: false,
       pendingSandboxConfirm: null,
       pendingAgentRouteConfirm: null,
+      pendingShellRiskAck: null,
       activeTaskId: sameEpisode ? s.activeTaskId : null,
       activeTaskStatus: sameEpisode ? s.activeTaskStatus : null,
       activeTaskPlan: null,

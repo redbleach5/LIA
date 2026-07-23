@@ -4,6 +4,7 @@ import { compressFileForContext, estimateCharsBudget } from '@/lib/agent/context
 import {
   sanitizeCommandArgs,
   sanitizePackageManagerArgs,
+  isDangerousPackageCommand,
 } from '@/lib/agent/command-sanitize';
 import {
   resolvePermissionTier,
@@ -64,6 +65,19 @@ describe('command sanitize', () => {
 
   it('allows bun test', () => {
     expect(sanitizePackageManagerArgs('bun', ['test']).ok).toBe(true);
+  });
+
+  it('flags install/ci as dangerous, not run/test', () => {
+    expect(isDangerousPackageCommand('npm', ['install', 'evil-pkg'])).toBe(true);
+    expect(isDangerousPackageCommand('npm', ['i', 'evil-pkg'])).toBe(true);
+    expect(isDangerousPackageCommand('bun', ['install'])).toBe(true);
+    expect(isDangerousPackageCommand('bun', ['ci'])).toBe(true);
+    expect(isDangerousPackageCommand('yarn', ['add', 'x'])).toBe(true);
+    expect(isDangerousPackageCommand('pnpm', ['add', 'x'])).toBe(true);
+    expect(isDangerousPackageCommand('npx', ['some-pkg'])).toBe(false);
+    expect(isDangerousPackageCommand('bun', ['run', 'test:ci'])).toBe(false);
+    expect(isDangerousPackageCommand('npm', ['test'])).toBe(false);
+    expect(isDangerousPackageCommand('git', ['status'])).toBe(false);
   });
 });
 

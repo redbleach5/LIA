@@ -31,6 +31,7 @@ export type MessagePart =
       goal: string;
       steps: string[];
       complexity: string;
+      targetFiles?: string[];
       executor?: AgentExecutorKind;
     }
   | {
@@ -100,7 +101,7 @@ export type AgentPartEvent =
   | {
       type: 'task_plan_ready';
       taskId: string;
-      plan: { goal: string; steps: string[]; complexity: string };
+      plan: { goal: string; steps: string[]; complexity: string; targetFiles?: string[] };
       executor?: AgentExecutorKind;
       ts: number;
       eventId?: string;
@@ -342,6 +343,7 @@ export function reduceAgentParts(
           goal: event.plan.goal,
           steps: event.plan.steps,
           complexity: event.plan.complexity,
+          targetFiles: event.plan.targetFiles,
           executor: event.executor,
         },
       ];

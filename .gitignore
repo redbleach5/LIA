@@ -59,6 +59,7 @@ public/models/*.vrm
 
 # Generated artifacts (user-uploaded / Lia-generated)
 download/lia-artifacts/
+download/lia-runtime-pids/
 download/agent-workspaces/
 
 # User uploads (screenshots, etc.) — NOT part of Lia (root only; not API routes)

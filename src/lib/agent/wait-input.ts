@@ -5,7 +5,13 @@ import { emitAgentEvent, setWaiting, isCancelled, cancelWaiting } from './events
 import { logger } from '@/lib/logger';
 
 export type AgentCheckpoint = {
-  plan: { goal: string; steps: string[]; needsTools: boolean; complexity: 'low' | 'medium' | 'high' };
+  plan: {
+    goal: string;
+    steps: string[];
+    needsTools: boolean;
+    complexity: 'low' | 'medium' | 'high';
+    targetFiles?: string[];
+  };
   steps: Array<{ thought: string; action: string; input: unknown; observation: string; ts: number; durationMs?: number }>;
   savedAt: number;
   pendingQuestion?: string;

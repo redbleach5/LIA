@@ -147,6 +147,7 @@ export async function updateAgentTask(id: string, params: Partial<{
   status: AgentTaskStatus;
   planJson: string | null;
   currentStep: number;
+  maxSteps: number;
   stepsJson: string;
   startedAt: Date | null;
   completedAt: Date | null;

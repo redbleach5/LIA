@@ -12,6 +12,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
+import { hasAgentShellRiskAck } from '@/lib/agent/shell-risk-ack';
 
 /**
  * Confirm Edit→sandbox when no project/KB workspace is bound.
@@ -36,6 +37,20 @@ export function SandboxConfirmDialog() {
     useChatStore.getState().setPendingSandboxConfirm(null);
 
     const { goal, workspaceMode, userMessageId, template } = p;
+
+    if (!hasAgentShellRiskAck()) {
+      useChatStore.getState().setPendingShellRiskAck({
+        goal,
+        workspaceMode,
+        userMessageId,
+        source: 'sandbox',
+        template,
+        confirmSandbox: true,
+        forceAgent: true,
+      });
+      return;
+    }
+
     const episodeId = useChatStore.getState().currentEpisodeId;
     if (!episodeId) return;
 

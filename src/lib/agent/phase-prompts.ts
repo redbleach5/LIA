@@ -63,7 +63,9 @@ ${input.fixHint}
 ${input.fsHint}
 
 Верни СТРОГО JSON вида:
-{"goal":"...","steps":["строка шага 1","строка шага 2"],"needsTools":true,"complexity":"medium"}`;
+{"goal":"...","steps":["строка шага 1","строка шага 2"],"needsTools":true,"complexity":"medium","targetFiles":["относительный/путь.ts"]}
+- targetFiles — ожидаемые пути файлов (относительно workspace), до 20; можно [] если ещё неизвестны
+- Где возможно, называй конкретные пути в steps и targetFiles`;
 
   return withTemplateOverlay(base, input.systemOverlay);
 }
@@ -104,6 +106,7 @@ function executeRulesForMode(mode: ExecutePromptMode, createPresetLine: string):
     case 'explore_lia':
       return `- Анализ проекта: list_tree → grep → read_file. Цитируй пути файлов.
 - Карта кода в контексте — читай перечисленные модули, не только docs
+- Связанные правки (компонент+route+nav): write_files или несколько tool calls в одном шаге — не трать шаг на один файл
 - Тесты/git в репо: run_command (bun/npm/vitest/git) внутри fsScope; сниппеты — code_run
 - Пустой list_tree / ошибка пути — смени путь или стратегию, не пиши ГОТОВО и не зови ask_user «какой проект»
 - "ГОТОВО: <резюме>" или "DONE: <summary>" — только отдельной строкой и только если цель реально закрыта
@@ -112,6 +115,7 @@ function executeRulesForMode(mode: ExecutePromptMode, createPresetLine: string):
     case 'explore_external':
       return `- Анализ репозитория в fsScope: list_tree → list_dir/grep/read_file только по путям из инструментов.
 - Исправления: edit_file только после read_file; маленькие точечные правки, не переписывай целые schema/файлы вслепую.
+- Связанные правки: write_files (batch) или несколько write/edit в одном шаге
 - Тесты/git: run_command (bun/npm/pytest/git); force push и git --hard запрещены tool'ом
 - Пустой list_tree / ENOENT — смени путь, не пиши ГОТОВО
 - "ГОТОВО: <резюме>" или "DONE: <summary>" — только отдельной строкой и только если цель реально закрыта
@@ -133,7 +137,7 @@ function executeRulesForMode(mode: ExecutePromptMode, createPresetLine: string):
 - ask_user — только при настоящей неоднозначности цели; не спрашивай из‑за пустого sandbox
 - Ошибки инструментов: смени подход; каждый шаг должен приближать к цели`;
     default:
-      return `- Если нужен код — полный рабочий код; многофайловый проект — отдельные save_artifact; проверка — run_command или code_run
+      return `- Если нужен код — полный рабочий код; связанные файлы — write_files (batch) или несколько write_file в одном шаге
 - "ГОТОВО: <резюме>" или "DONE: <summary>" — только отдельной строкой и только если цель реально закрыта
 - ask_user — только при настоящей неоднозначности цели; не спрашивай из‑за пустого sandbox
 - Ошибки инструментов: смени подход; каждый шаг должен приближать к цели`;

@@ -64,9 +64,16 @@ import { isFixOrDebugArtifactGoal, isReferentialWorkspaceGoal, shouldReuseRecent
 import { applyGroundednessFilter } from './kb-groundedness';
 import { packKbEvidenceForSynthesis } from './kb-evidence-pack';
 import { isProjectRootFsScope } from './workspace-scope';
-import { formatAgentStepHistory } from './step-history-compact';
+import { formatAgentStepHistory, formatFileChangesDigest } from './step-history-compact';
 import { stepsHaveRuntimeVerify } from './runtime/verify';
 import { designNeedsRuntimeVerify, inferProjectDesign } from './runtime/infer-design';
+import {
+  buildCodingTaskBrief,
+  normalizeTargetFiles,
+} from './coding-intent';
+import { loadCodingBriefPromptBlock, saveCodingTaskBrief } from './coding-brief';
+import { listTaskFileChanges } from './file-changes';
+import { buildCodebaseSketch } from './explore-probe';
 import {
   annotateCreateRunCommandObservation,
   isIncompleteCreatePlan,
@@ -154,9 +161,10 @@ export const planSchema = z.object({
   steps: z.array(planStepSchema).default([]),
   needsTools: z.boolean().default(true),
   complexity: z.enum(['low', 'medium', 'high']).default('medium').catch('medium'),
+  targetFiles: z.array(z.string()).optional().default([]),
 });
 
-export type AgentPlan = z.infer<typeof planSchema>;
+export type AgentPlan = z.infer<typeof planSchema> & { targetFiles: string[] };
 
 // NOTE: previously runner-helpers.ts had its own `OBSERVATION_CAP = 4000` for
 // resumeFromCheckpoint, while runner.ts used `OBSERVATION_CAP = 5000` for
@@ -268,6 +276,7 @@ export async function resumeFromCheckpoint(
         goal: displayAgentGoal(plan.goal) || displayAgentGoal(task.goal),
         steps: plan.steps,
         complexity: plan.complexity,
+        targetFiles: plan.targetFiles ?? [],
       },
       ts: Date.now(),
     });
@@ -461,6 +470,20 @@ export async function synthesizeAndFinish(
       sourceType: 'summary',
       text: `[agent:${task.goal.slice(0, 120)}] ${resultSummary.slice(0, 1500)}`,
     }).catch(() => null);
+  }
+
+  // Durable coding brief for follow-up tasks on the same workspace.
+  if (task.fsScope) {
+    const files = listTaskFileChanges(taskId)
+      .filter((c) => c.status === 'applied' || c.status === 'pending')
+      .map((c) => c.path);
+    const fromPlan = normalizeTargetFiles(plan?.targetFiles);
+    const brief = buildCodingTaskBrief({
+      goal: displayAgentGoal(task.goal),
+      summary: resultSummary,
+      files: [...fromPlan, ...files],
+    });
+    await saveCodingTaskBrief(task.fsScope, brief);
   }
 }
 
@@ -707,6 +730,7 @@ export function fallbackPlan(task: AgentTask): AgentPlan {
     steps: base.steps,
     needsTools: base.needsTools,
     complexity: base.complexity,
+    targetFiles: [],
   };
 }
 
@@ -759,10 +783,31 @@ export async function generatePlan(
     ? `- Follow-up по артефакту: сначала list_tree/read_file в текущем sandbox, потом правка, затем runtime_start. Запрещено начинать с list_sources или ask_user.`
     : '';
 
+  const briefBlock = await loadCodingBriefPromptBlock(task.fsScope);
+  const briefHint = briefBlock
+    ? `\n${briefBlock}\n- Учитывай previous coding brief при планировании follow-up; не повторяй уже сделанное без нужды.`
+    : '';
+
+  // Explore-then-plan: bounded sketch for coding/edit goals with a real fsScope.
+  let codebaseSketch = '';
+  const wantsCodingPlan =
+    !!task.fsScope
+    && (
+      isCodeExplorationGoal(task.goal)
+      || isCodeCreationGoal(task.goal)
+      || /edit_file|write_file|компонент|route|роуть|навигац|backend|api\b|страниц/i.test(task.goal)
+    );
+  if (wantsCodingPlan) {
+    codebaseSketch = await buildCodebaseSketch(task.fsScope, task.goal);
+  }
+  const sketchHint = codebaseSketch
+    ? `\n${codebaseSketch}\n- В steps и targetFiles указывай конкретные пути из sketch/hits, где возможно.`
+    : '';
+
   const systemPrompt = buildPlanSystemPrompt({
     toolDescriptions,
     maxSteps: task.maxSteps,
-    fsHint,
+    fsHint: fsHint + briefHint + sketchHint,
     explorationHint,
     kbOnlyHint,
     createHint,
@@ -887,6 +932,7 @@ export async function generatePlan(
 
     // Never leak template/system text into plan.goal (UI + further prompts).
     validated.data.goal = displayAgentGoal(validated.data.goal) || displayAgentGoal(task.goal);
+    validated.data.targetFiles = normalizeTargetFiles(validated.data.targetFiles);
     return validated.data;
   } catch (e) {
     logger.warn('agent', 'Plan generation failed — using fallback', { goal: task.goal.slice(0, 80) }, e);
@@ -910,6 +956,10 @@ export function buildStepMessages(
 
   // Context window: last 5 steps full; older → extractive compact (not raw 200-char trunc).
   const stepsStr = formatAgentStepHistory(previousSteps, truncateObservationForPrompt);
+  const fileDigest = formatFileChangesDigest(
+    listTaskFileChanges(task.id).map((c) => ({ path: c.path, tool: c.tool, status: c.status })),
+  );
+  const historyBlock = fileDigest ? `${stepsStr}\n\n${fileDigest}` : stepsStr;
 
   const isKbGoal = isKbLookupGoal(task.goal);
   const isExploration = isCodeExplorationGoal(task.goal) || isKbAssistedGoal(task.goal);
@@ -945,7 +995,7 @@ export function buildStepMessages(
   });
 
   const userPrompt = `Предыдущие шаги:
-${stepsStr}
+${historyBlock}
 
 Что делаем дальше?`;
 

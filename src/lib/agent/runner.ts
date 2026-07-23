@@ -272,7 +272,7 @@ export async function runAgentTask(taskId: string): Promise<void> {
   }
   activeRunners.add(taskId);
 
-  const task = await getAgentTask(taskId);
+  let task = await getAgentTask(taskId);
   if (!task) {
     activeRunners.delete(taskId);
     log.error('agent', 'Task not found');
@@ -389,6 +389,7 @@ export async function runAgentTask(taskId: string): Promise<void> {
       steps: string[];
       needsTools: boolean;
       complexity: 'low' | 'medium' | 'high';
+      targetFiles?: string[];
     };
 
     let plan: AgentPlan;
@@ -420,6 +421,14 @@ export async function runAgentTask(taskId: string): Promise<void> {
 
       await updateAgentTask(taskId, { planJson: JSON.stringify(plan) });
 
+      // High-complexity coding: raise step budget (coder default 20 → up to 28).
+      if (plan.complexity === 'high' && task.maxSteps < 28) {
+        const nextMax = 28;
+        await updateAgentTask(taskId, { maxSteps: nextMax });
+        task = { ...task, maxSteps: nextMax };
+        log.info('agent', 'Raised maxSteps for high complexity', { maxSteps: nextMax });
+      }
+
       emitAgentEvent({
         type: 'task_plan_ready',
         taskId,
@@ -427,6 +436,7 @@ export async function runAgentTask(taskId: string): Promise<void> {
           goal: displayAgentGoal(plan.goal) || displayAgentGoal(task.goal),
           steps: plan.steps,
           complexity: plan.complexity,
+          targetFiles: plan.targetFiles ?? [],
         },
         ts: Date.now(),
       });
@@ -548,7 +558,9 @@ export async function runAgentTask(taskId: string): Promise<void> {
         });
       }
     } catch (e) {
-      log.debug('agent', 'mention/rules context skipped', {}, e);
+      log.debug('agent', 'mention/rules context skipped', {
+        err: e instanceof Error ? e.message : String(e),
+      });
     }
     const contextStr = [
       workspaceMemoryBlock,
@@ -884,6 +896,20 @@ export async function runAgentTask(taskId: string): Promise<void> {
         durationMs: stepDuration,
         ts: Date.now(),
       });
+
+      // Merge actual file paths into plan.targetFiles for UI / brief.
+      try {
+        const { listTaskFileChanges } = await import('@/lib/agent/file-changes');
+        const { mergeTargetFiles } = await import('@/lib/agent/coding-intent');
+        const touched = listTaskFileChanges(taskId).map((c) => c.path);
+        if (touched.length > 0) {
+          plan = {
+            ...plan,
+            targetFiles: mergeTargetFiles(plan.targetFiles ?? [], touched),
+          };
+          await updateAgentTask(taskId, { planJson: JSON.stringify(plan) });
+        }
+      } catch { /* non-fatal */ }
 
       // Pure KB lookup: enough grounded material → synthesize early (not for exploration).
       if (shouldFinalizeKbLookupAfterSteps(task.goal, steps)) {

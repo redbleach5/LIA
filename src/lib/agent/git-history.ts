@@ -52,7 +52,7 @@ export async function capturePreApplyGitSnapshot(
     snapshots.set(taskId, snap);
     return snap;
   } catch (e) {
-    logger.debug('agent', 'git snapshot failed', {}, e);
+    logger.debug('agent', 'git snapshot failed', { err: e instanceof Error ? e.message : String(e) });
     return null;
   }
 }

@@ -34,6 +34,17 @@ export type PendingAgentRouteConfirm = {
   userMessageId: string;
 };
 
+/** First-run shell/packages risk ack before creating an agent task. */
+export type PendingShellRiskAck = {
+  goal: string;
+  workspaceMode: AgentWorkspaceModeInput;
+  userMessageId: string;
+  source: 'chat' | 'panel' | 'sandbox' | 'route';
+  template?: 'general' | 'researcher' | 'coder';
+  confirmSandbox?: boolean;
+  forceAgent?: boolean;
+};
+
 export type MessagesSlice = {
   messages: ChatMessage[];
   /** True when older messages exist beyond the loaded window (cursor pagination). */
@@ -48,6 +59,7 @@ export type MessagesSlice = {
   agentApplyMode: AgentApplyMode;
   pendingSandboxConfirm: PendingSandboxConfirm | null;
   pendingAgentRouteConfirm: PendingAgentRouteConfirm | null;
+  pendingShellRiskAck: PendingShellRiskAck | null;
 
   setMessages: (msgs: ChatMessage[], opts?: { hasMore?: boolean }) => void;
   prependMessages: (msgs: ChatMessage[], opts?: { hasMore?: boolean }) => void;
@@ -64,6 +76,7 @@ export type MessagesSlice = {
   setAgentApplyMode: (m: AgentApplyMode) => void;
   setPendingSandboxConfirm: (p: PendingSandboxConfirm | null) => void;
   setPendingAgentRouteConfirm: (p: PendingAgentRouteConfirm | null) => void;
+  setPendingShellRiskAck: (p: PendingShellRiskAck | null) => void;
   /**
    * Ensure an agent-turn companion message exists for taskId, then reduce event into parts[].
    * Workbench must not write bubble content — only this path.
@@ -95,6 +108,7 @@ export const createMessagesSlice: StateCreator<
     : 'ask',
   pendingSandboxConfirm: null,
   pendingAgentRouteConfirm: null,
+  pendingShellRiskAck: null,
 
   setMessages: (msgs, opts) => set({
     messages: msgs,
@@ -176,6 +190,7 @@ export const createMessagesSlice: StateCreator<
   },
   setPendingSandboxConfirm: (p) => set({ pendingSandboxConfirm: p }),
   setPendingAgentRouteConfirm: (p) => set({ pendingAgentRouteConfirm: p }),
+  setPendingShellRiskAck: (p) => set({ pendingShellRiskAck: p }),
 
   applyAgentPartEvent: (taskId, event) => set((s) => {
     const idx = s.messages.findIndex(

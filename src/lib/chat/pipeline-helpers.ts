@@ -382,7 +382,7 @@ export async function runProactiveKbSearch(params: {
       if (usedSoftFallback) {
         parts.push('Точного совпадения ключевых слов нет — ниже ближайшие фрагменты по смыслу.');
         parts.push('Если фрагменты не про то, что спросил пользователь — честно скажи об этом.');
-        if (plan.toolsEnabled) {
+        if (params.plan.toolsEnabled) {
           parts.push('Можно предложить уточнить термин или вызвать search_sources / get_source.');
         } else {
           parts.push('Предложи уточнить термин или документ.');

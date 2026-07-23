@@ -86,49 +86,89 @@ function makeWriteFileTool(task: AgentTask) {
       path: z.string().min(1).describe('Путь относительно рабочей директории'),
       content: z.string().min(0).describe('Содержимое файла (текст)'),
     }),
-    execute: async ({ path, content }) => {
-      const scoped = await resolveScopedPath(task, path, 'Запись файлов запрещена.');
-      if (!scoped.ok) return { error: scoped.error };
-      try {
-        let previousContent: string | null = null;
-        try {
-          previousContent = await readFile(scoped.fullPath, 'utf8');
-        } catch (e) {
-          const err = e as NodeJS.ErrnoException;
-          if (err.code !== 'ENOENT') throw e;
-        }
+    execute: async ({ path, content }) => writeOneFile(task, path, content),
+  });
+}
 
-        await mkdir(dirname(scoped.fullPath), { recursive: true });
+const WRITE_FILES_MAX = 8;
+const WRITE_FILES_TOTAL_CHARS = 200_000;
 
-        const previewLines = content.split('\n').slice(0, 12);
-        const diff = previousContent === null
-          ? previewLines.map((l, i) => `+ ${i + 1}: ${l}`).join('\n')
-          : undefined;
+async function writeOneFile(task: AgentTask, path: string, content: string) {
+  const scoped = await resolveScopedPath(task, path, 'Запись файлов запрещена.');
+  if (!scoped.ok) return { error: scoped.error, path };
+  try {
+    let previousContent: string | null = null;
+    try {
+      previousContent = await readFile(scoped.fullPath, 'utf8');
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err.code !== 'ENOENT') throw e;
+    }
 
-        const change = await proposeOrApplyFileChange({
-          taskId: task.id,
-          path,
-          tool: 'write_file',
-          previousContent,
-          proposedContent: content,
-          diff,
-          fsScope: task.fsScope,
-        });
+    await mkdir(dirname(scoped.fullPath), { recursive: true });
 
+    const previewLines = content.split('\n').slice(0, 12);
+    const diff = previousContent === null
+      ? previewLines.map((l, i) => `+ ${i + 1}: ${l}`).join('\n')
+      : undefined;
+
+    const change = await proposeOrApplyFileChange({
+      taskId: task.id,
+      path,
+      tool: 'write_file',
+      previousContent,
+      proposedContent: content,
+      diff,
+      fsScope: task.fsScope,
+    });
+
+    return {
+      path,
+      size: content.length,
+      written: change.applied,
+      pending: !change.applied,
+      changeId: change.id,
+      canUndo: change.canUndo,
+      message: change.applied
+        ? undefined
+        : 'Файл предложен — ждёт Apply в чате (ask-режим). read_file видит overlay.',
+    };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e), path };
+  }
+}
+
+function makeWriteFilesTool(task: AgentTask) {
+  return tool({
+    description:
+      'Записать несколько файлов одним вызовом (scaffold: компонент + route + nav). '
+      + `Макс ${WRITE_FILES_MAX} файлов, суммарно ≤${WRITE_FILES_TOTAL_CHARS} символов. `
+      + 'Предпочитай write_files вместо серии write_file для связанных правок.',
+    inputSchema: z.object({
+      files: z.array(z.object({
+        path: z.string().min(1),
+        content: z.string().min(0),
+      })).min(1).max(WRITE_FILES_MAX),
+    }),
+    execute: async ({ files }) => {
+      const total = files.reduce((n, f) => n + (f.content?.length ?? 0), 0);
+      if (total > WRITE_FILES_TOTAL_CHARS) {
         return {
-          path,
-          size: content.length,
-          written: change.applied,
-          pending: !change.applied,
-          changeId: change.id,
-          canUndo: change.canUndo,
-          message: change.applied
-            ? undefined
-            : 'Файл предложен — ждёт Apply в чате (ask-режим). read_file видит overlay.',
+          error: `Суммарный размер ${total} > ${WRITE_FILES_TOTAL_CHARS}. Разбей на несколько вызовов.`,
+          success: false,
         };
-      } catch (e) {
-        return { error: e instanceof Error ? e.message : String(e) };
       }
+      const results = [];
+      for (const f of files) {
+        results.push(await writeOneFile(task, f.path, f.content));
+      }
+      const ok = results.filter((r) => !('error' in r && r.error)).length;
+      return {
+        success: ok === results.length,
+        written: ok,
+        total: results.length,
+        results,
+      };
     },
   });
 }
@@ -500,6 +540,7 @@ export function buildAgentTools(
     }),
     read_file: makeReadFileTool(task),
     write_file: makeWriteFileTool(task),
+    write_files: makeWriteFilesTool(task),
     edit_file: makeEditFileTool(task),
     list_dir: makeListDirTool(task),
     list_tree: makeListTreeTool(task),
@@ -530,7 +571,7 @@ export function buildAgentTools(
       tools[toolName] = tool({
         description: `[MCP:${t.serverId}] ${t.description}`,
         inputSchema: z.object({
-          args: z.record(z.unknown()).default({}),
+          args: z.record(z.string(), z.unknown()).default({}),
         }),
         execute: async ({ args }) => {
           emitAgentEvent({

@@ -15,6 +15,7 @@ import { beginChatStream, endChatStream } from '@/lib/chat/client-stream-control
 import { parseStreamErrorPayload } from '@/lib/chat/stream-error';
 import { cueAvatarGesture, cueAvatarLook } from '@/lib/avatar-cues';
 import { toast } from 'sonner';
+import { hasAgentShellRiskAck } from '@/lib/agent/shell-risk-ack';
 
 /**
  * Ambiguous message while UI mode is Agent — confirm chat vs agent run.
@@ -38,6 +39,18 @@ export function AgentRouteConfirmDialog() {
     useChatStore.getState().setPendingAgentRouteConfirm(null);
 
     const { goal, workspaceMode, userMessageId } = p;
+
+    if (!hasAgentShellRiskAck()) {
+      useChatStore.getState().setPendingShellRiskAck({
+        goal,
+        workspaceMode,
+        userMessageId,
+        source: 'route',
+        forceAgent: true,
+      });
+      return;
+    }
+
     const episodeId = useChatStore.getState().currentEpisodeId;
     if (!episodeId) return;
 
