@@ -10,7 +10,7 @@ import {
   stopRuntime,
   probeLocalPort,
 } from '@/lib/agent/runtime/process-supervisor';
-import { parseProjectDesignJson, PROJECT_MANIFEST_FILENAME } from '@/lib/agent/runtime/project-manifest';
+import { parseProjectDesignJson, previewUrlForDesign, PROJECT_MANIFEST_FILENAME } from '@/lib/agent/runtime/project-manifest';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { logger } from '@/lib/logger';
@@ -47,11 +47,14 @@ export async function GET(
   if (port && (!snapshot || snapshot.status === 'idle' || snapshot.status === 'stopped')) {
     const up = await probeLocalPort(port);
     if (up) {
+      const fromDesign = design ? previewUrlForDesign(design) : null;
       snapshot = {
         taskId: id,
         status: 'healthy',
         port,
-        previewUrl: design ? `http://127.0.0.1:${port}` : (snapshot?.previewUrl ?? `http://127.0.0.1:${port}`),
+        previewUrl: fromDesign
+          ?? snapshot?.previewUrl
+          ?? `http://127.0.0.1:${port}/`,
         pid: snapshot?.pid ?? null,
         restartCount: snapshot?.restartCount ?? 0,
         lastError: null,

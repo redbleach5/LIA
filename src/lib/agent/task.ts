@@ -4,6 +4,8 @@ import 'server-only';
 
 import { db } from '@/lib/db';
 import { randomUUID } from 'crypto';
+import { displayAgentGoal, extractLegacyTemplateOverlay } from './goal-display';
+import { getTemplate } from './templates';
 
 export type AgentTaskStatus =
   | 'pending'
@@ -25,7 +27,12 @@ export const AGENT_TRANSIENT_STATUSES = [
 export type AgentTask = {
   id: string;
   episodeId: string;
+  /** User-facing goal only (never template system prompt). */
   goal: string;
+  /** Preset name; overlay resolved into LLM system channel. */
+  templateName: string | null;
+  /** Template / legacy instructions for LLM system — not for UI. */
+  systemOverlay: string;
   status: AgentTaskStatus;
   planJson: string | null;
   currentStep: number;
@@ -47,6 +54,7 @@ export type AgentTask = {
 export type CreateAgentTaskInput = {
   episodeId: string;
   goal: string;
+  templateName?: string | null;
   toolsWhitelist?: string[] | null;
   fsScope?: string | null;
   maxSteps?: number;
@@ -54,11 +62,14 @@ export type CreateAgentTaskInput = {
 };
 
 export async function createAgentTask(input: CreateAgentTaskInput): Promise<AgentTask> {
+  const templateName = input.templateName && input.templateName !== 'general'
+    ? input.templateName
+    : null;
   const task = await db.agentTask.create({
     data: {
       id: randomUUID(),
       episodeId: input.episodeId,
-      goal: input.goal,
+      goal: displayAgentGoal(input.goal),
       status: 'pending',
       maxSteps: input.maxSteps ?? 15,
       maxDurationSec: input.maxDurationSec ?? 600,
@@ -68,12 +79,27 @@ export async function createAgentTask(input: CreateAgentTaskInput): Promise<Agen
       artifactsJson: '[]',
     },
   });
-  return toAgentTask(task);
+  // templateName is additive (schema patch); write via SQL so older Prisma
+  // clients still work before `prisma generate` unlocks.
+  if (templateName) {
+    try {
+      await db.$executeRawUnsafe(
+        'UPDATE "AgentTask" SET "templateName" = ? WHERE "id" = ?',
+        templateName,
+        task.id,
+      );
+    } catch (e) {
+      // Column missing until db:patch — non-fatal; overlay falls back to none.
+    }
+  }
+  return toAgentTask({ ...task, templateName });
 }
 
 export async function getAgentTask(id: string): Promise<AgentTask | null> {
   const task = await db.agentTask.findUnique({ where: { id } });
-  return task ? toAgentTask(task) : null;
+  if (!task) return null;
+  const templateName = await readTemplateName(id);
+  return toAgentTask({ ...task, templateName });
 }
 
 export async function listAgentTasks(
@@ -85,7 +111,36 @@ export async function listAgentTasks(
     orderBy: { createdAt: 'desc' },
     take: limit,
   });
-  return tasks.map(toAgentTask);
+  const names = await readTemplateNames(tasks.map(t => t.id));
+  return tasks.map(t => toAgentTask({ ...t, templateName: names.get(t.id) ?? null }));
+}
+
+async function readTemplateName(id: string): Promise<string | null> {
+  try {
+    const rows = await db.$queryRawUnsafe<Array<{ templateName: string | null }>>(
+      'SELECT "templateName" AS templateName FROM "AgentTask" WHERE "id" = ? LIMIT 1',
+      id,
+    );
+    return rows[0]?.templateName ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function readTemplateNames(ids: string[]): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>();
+  if (ids.length === 0) return map;
+  try {
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = await db.$queryRawUnsafe<Array<{ id: string; templateName: string | null }>>(
+      `SELECT "id" AS id, "templateName" AS templateName FROM "AgentTask" WHERE "id" IN (${placeholders})`,
+      ...ids,
+    );
+    for (const r of rows) map.set(r.id, r.templateName ?? null);
+  } catch {
+    /* column missing */
+  }
+  return map;
 }
 
 export async function updateAgentTask(id: string, params: Partial<{
@@ -115,6 +170,7 @@ function toAgentTask(row: {
   id: string;
   episodeId: string;
   goal: string;
+  templateName?: string | null;
   status: string;
   planJson: string | null;
   currentStep: number;
@@ -132,10 +188,18 @@ function toAgentTask(row: {
   resultSummary: string | null;
   artifactsJson: string;
 }): AgentTask {
+  const rawGoal = row.goal;
+  const templateName = row.templateName ?? null;
+  const systemOverlay = templateName
+    ? getTemplate(templateName).systemPrompt
+    : extractLegacyTemplateOverlay(rawGoal);
+
   return {
     id: row.id,
     episodeId: row.episodeId,
-    goal: row.goal,
+    goal: displayAgentGoal(rawGoal),
+    templateName,
+    systemOverlay,
     status: row.status as AgentTaskStatus,
     planJson: row.planJson,
     currentStep: row.currentStep,

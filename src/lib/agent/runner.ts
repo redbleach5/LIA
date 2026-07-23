@@ -48,6 +48,7 @@ import { recall, formatVectorHitsForPrompt } from '@/lib/memory/vector';
 import { buildCodeExplorationSeed } from './code-seed';
 import { basename, resolve as resolvePath } from 'path';
 import { escapeForPrompt } from '@/lib/infra/prompt-safety';
+import { displayAgentGoal } from './goal-display';
 
 // Helpers (lifecycle + LLM phases) — extracted 2026-07-08 to reduce god function size.
 // See runner-helpers.ts for the full list. Constants and plan schema are also
@@ -123,7 +124,7 @@ export async function sweepStaleTasks(): Promise<number> {
   try {
     const staleTasks = await db.agentTask.findMany({
       where: { status: { in: [...AGENT_TRANSIENT_STATUSES] } },
-      select: { id: true, status: true, checkpointJson: true },
+      select: { id: true, status: true, checkpointJson: true, episodeId: true },
     });
 
     // Never sweep tasks that still have a live in-memory runner (HMR / lazy
@@ -139,14 +140,24 @@ export async function sweepStaleTasks(): Promise<number> {
     const failed = candidates.filter(t => !resumable.some(r => r.id === t.id));
 
     if (failed.length > 0) {
+      const sweepError =
+        'Сервер был перезапущен во время выполнения задачи. Перезапустите задачу для продолжения.';
       await db.agentTask.updateMany({
         where: { id: { in: failed.map(t => t.id) } },
         data: {
           status: 'failed',
-          error: 'Сервер был перезапущен во время выполнения задачи. Перезапустите задачу для продолжения.',
+          error: sweepError,
           completedAt: new Date(),
         },
       });
+      // Mirror into chat so F5 still shows why the run stopped.
+      const { persistAgentResultToChat, agentFailedChatContent } = await import('./persist-to-chat');
+      for (const t of failed) {
+        await persistAgentResultToChat(
+          { episodeId: t.episodeId },
+          agentFailedChatContent(sweepError),
+        );
+      }
     }
 
     if (resumable.length > 0) {
@@ -363,7 +374,11 @@ export async function runAgentTask(taskId: string): Promise<void> {
       emitAgentEvent({
         type: 'task_plan_ready',
         taskId,
-        plan: { goal: plan.goal, steps: plan.steps, complexity: plan.complexity },
+        plan: {
+          goal: displayAgentGoal(plan.goal) || displayAgentGoal(task.goal),
+          steps: plan.steps,
+          complexity: plan.complexity,
+        },
         ts: Date.now(),
       });
       steps = [];
@@ -861,7 +876,8 @@ export async function runAgentTask(taskId: string): Promise<void> {
         error: null,
         checkpointJson: null,  // Phase 4.1: очищаем checkpoint
       });
-      emitAgentEvent({ type: 'task_cancelled', taskId, ts: Date.now() });
+      const { emitTaskCancelledToChat } = await import('./persist-to-chat');
+      await emitTaskCancelledToChat({ id: taskId, episodeId: task.episodeId });
     } else {
       await updateAgentTask(taskId, {
         status: 'failed',
@@ -869,7 +885,8 @@ export async function runAgentTask(taskId: string): Promise<void> {
         error: errorMsg,
         checkpointJson: null,  // Phase 4.1: очищаем checkpoint
       });
-      emitAgentEvent({ type: 'task_failed', taskId, error: errorMsg, ts: Date.now() });
+      const { emitTaskFailedToChat } = await import('./persist-to-chat');
+      await emitTaskFailedToChat({ id: taskId, episodeId: task.episodeId }, errorMsg);
 
       // Smart error analysis
       // steps + error, persists structured diagnosis (rootCause, suggestedFix)
@@ -951,6 +968,8 @@ export async function cancelAgentTaskRun(taskId: string): Promise<void> {
       status: 'cancelled',
       completedAt: new Date(),
     });
+    const { emitTaskCancelledToChat } = await import('./persist-to-chat');
+    await emitTaskCancelledToChat({ id: taskId, episodeId: task.episodeId });
   } else {
     logger.debug('agent', `Cancel: task already in terminal status`, { status: task?.status });
   }

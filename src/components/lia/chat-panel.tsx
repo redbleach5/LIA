@@ -13,6 +13,7 @@ import { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import { EmptyState } from '@/components/lia/empty-state';
 import { WorkspaceBadge } from '@/components/lia/workspace-badge';
 import { SandboxConfirmDialog } from '@/components/lia/sandbox-confirm-dialog';
+import { AgentRouteConfirmDialog } from '@/components/lia/agent-route-confirm-dialog';
 import { isAgentBusyStatus } from '@/lib/agent/task-status-ui';
 import { cn } from '@/lib/utils';
 import { ArrowDown, Loader2 } from 'lucide-react';
@@ -157,6 +158,7 @@ export function ChatPanel({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <SandboxConfirmDialog />
+      <AgentRouteConfirmDialog />
       <div className="min-h-7 border-b border-border shrink-0 bg-surface/50">
         <div className={cn('flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1', 'lia-chat-rail')}>
           <div className="flex-1 min-w-0 flex items-center gap-2">

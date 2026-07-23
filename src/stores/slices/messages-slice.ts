@@ -19,6 +19,13 @@ export type PendingSandboxConfirm = {
   template?: 'general' | 'researcher' | 'coder';
 };
 
+/** Ambiguous goal while UI is Agent — confirm chat vs agent run. */
+export type PendingAgentRouteConfirm = {
+  goal: string;
+  workspaceMode: AgentWorkspaceModeInput;
+  userMessageId: string;
+};
+
 export type MessagesSlice = {
   messages: ChatMessage[];
   /** True when older messages exist beyond the loaded window (cursor pagination). */
@@ -30,6 +37,7 @@ export type MessagesSlice = {
   /** Phase 4: Read / Explore / Edit (auto = infer). */
   agentWorkspaceMode: AgentWorkspaceModeInput;
   pendingSandboxConfirm: PendingSandboxConfirm | null;
+  pendingAgentRouteConfirm: PendingAgentRouteConfirm | null;
 
   setMessages: (msgs: ChatMessage[], opts?: { hasMore?: boolean }) => void;
   prependMessages: (msgs: ChatMessage[], opts?: { hasMore?: boolean }) => void;
@@ -44,6 +52,7 @@ export type MessagesSlice = {
   setMode: (m: ChatMode) => void;
   setAgentWorkspaceMode: (m: AgentWorkspaceModeInput) => void;
   setPendingSandboxConfirm: (p: PendingSandboxConfirm | null) => void;
+  setPendingAgentRouteConfirm: (p: PendingAgentRouteConfirm | null) => void;
 };
 
 export const createMessagesSlice: StateCreator<
@@ -60,6 +69,7 @@ export const createMessagesSlice: StateCreator<
   mode: 'auto',
   agentWorkspaceMode: 'auto',
   pendingSandboxConfirm: null,
+  pendingAgentRouteConfirm: null,
 
   setMessages: (msgs, opts) => set({
     messages: msgs,
@@ -129,6 +139,7 @@ export const createMessagesSlice: StateCreator<
   setMode: (m) => set({ mode: m }),
   setAgentWorkspaceMode: (m) => set({ agentWorkspaceMode: m }),
   setPendingSandboxConfirm: (p) => set({ pendingSandboxConfirm: p }),
+  setPendingAgentRouteConfirm: (p) => set({ pendingAgentRouteConfirm: p }),
 });
 
 function truncatePreview(content: string): string | null {

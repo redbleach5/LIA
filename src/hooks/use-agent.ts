@@ -44,6 +44,8 @@ export function useAgent() {
           ...params,
           workspaceMode,
           episodeId: state.currentEpisodeId,
+          // Explicit create from agent UI — skip intent gate.
+          forceAgent: true,
         }),
       });
       if (res.status === 409) {
@@ -74,6 +76,10 @@ export function useAgent() {
         return null;
       }
       const data = await res.json();
+      if (!data.task) {
+        toast.error(data.message || 'Не удалось создать задачу');
+        return null;
+      }
       const task = data.task as AgentTask;
       addAgentTask(task);
       useChatStore.getState().setActiveTask(task.id);

@@ -220,8 +220,12 @@ model AgentTask {
   episodeId String
   episode   Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
 
-  // Исходная задача пользователя
+  // Исходная задача пользователя (без template/system overlay)
   goal String
+
+  // Agent template preset: 'general' | 'researcher' | 'coder' | null
+  // Overlay is resolved at runtime into the LLM system channel — never into goal/UI.
+  templateName String?
 
   // 'pending' | 'planning' | 'executing' | 'waiting_input' | 'waiting_confirmation'
   // | 'synthesizing' | 'done' | 'failed' | 'cancelled'

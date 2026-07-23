@@ -60,6 +60,16 @@ export function applySchemaPatchesTo(dbPath) {
       skipped.push('Message.attachmentsJson');
     }
 
+    const agentCols = db.prepare('PRAGMA table_info(AgentTask)').all().map((c) => c.name);
+    if (agentCols.length > 0) {
+      if (!agentCols.includes('templateName')) {
+        db.exec('ALTER TABLE AgentTask ADD COLUMN templateName TEXT');
+        applied.push('AgentTask.templateName');
+      } else {
+        skipped.push('AgentTask.templateName');
+      }
+    }
+
     const tables = db
       .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='ChatAttachment'`)
       .all();

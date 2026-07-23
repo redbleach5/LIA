@@ -3,7 +3,7 @@
 // Thin handler: валидация (zod) → routing → runChatPipeline или auto-agent → response.
 //
 // AUTO-AGENT ROUTING:
-//   Когда mode='auto' и isAgentTask(text) — автоматически создаём agent task
+//   Когда mode='auto' и hasAgentWorkIntent(text) — автоматически создаём agent task
 //   вместо chat pipeline. Возвращаем JSON { type: 'agent_task', taskId, goal }.
 //   Клиент (use-chat.ts) детектит этот ответ и переключается на agent view.
 //   Это работает как у топовых нейронок — система сама решает когда нужен
@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { runChatPipeline } from '@/lib/chat/pipeline';
 import { parseBody, chatRequestSchema } from '@/lib/infra/api-validation';
-import { isAgentTask } from '@/lib/task-complexity';
+import { hasAgentWorkIntent } from '@/lib/agent/route-intent';
 import { createAgentTask } from '@/lib/agent/task';
 import { runAgentTask } from '@/lib/agent/runner';
 import { persistAgentGoalToChat } from '@/lib/agent/persist-to-chat';
@@ -39,10 +39,10 @@ export async function POST(req: NextRequest) {
   // В auto режиме проверяем: это задача для agent mode?
   // Если да — автоматически создаём agent task, не идём в chat pipeline.
   // Это transparent для пользователя — система сама выбирает правильный режим.
-  if (mode === 'auto' && !hasAttachments && isAgentTask(text)) {
+  if (mode === 'auto' && !hasAttachments && hasAgentWorkIntent(text)) {
     logger.info('chat', 'Auto-routing to agent mode', {
       textPreview: text.slice(0, 80),
-      reason: 'isAgentTask heuristic matched',
+      reason: 'hasAgentWorkIntent heuristic matched',
     });
 
     try {
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
       const { params: tierParams } = await getCognitiveParams();
       const goalText = text.trim();
 
-      const { resolveToolsWhitelistForMode } = await import('@/lib/agent/kb-step-utils');
+      const { resolveToolsWhitelistForMode, isCodeCreationGoal } = await import('@/lib/agent/kb-step-utils');
       const { needsSandboxConfirm } = await import('@/lib/agent/workspace-modes');
       let { mode: resolvedMode, toolsWhitelist } = resolveToolsWhitelistForMode({
         goal: goalText,
@@ -63,33 +63,54 @@ export async function POST(req: NextRequest) {
         goal: goalText,
         explicitFsScope: null,
         workspaceMode: resolvedMode,
+        dryRun: resolvedMode === 'edit',
       });
 
-      // Auto-agent cannot show confirm dialog — downgrade Edit→Explore
-      // instead of silently writing into an empty sandbox.
+      // Auto-agent cannot show sandbox confirm UI.
+      // Create goals need write sandbox — confirm implicitly.
+      // Other Edit goals without a project → Explore (read-only).
       if (needsSandboxConfirm(resolvedMode, resolved.kind, false, {
         intentionalSandboxBinding: resolved.binding?.kind === 'sandbox',
         fsScopeAlreadyBound: !!resolved.fsScope,
       })) {
-        logger.info('chat', 'Auto-agent Edit without project — downgrade to Explore', {
-          goalPreview: goalText.slice(0, 80),
-        });
-        resolvedMode = 'explore';
-        ({ toolsWhitelist } = resolveToolsWhitelistForMode({
-          goal: goalText,
-          workspaceModeInput: 'explore',
-        }));
-        resolved = await resolveWorkspace({
-          episodeId,
-          goal: goalText,
-          explicitFsScope: null,
-          workspaceMode: 'explore',
-        });
+        if (isCodeCreationGoal(goalText)) {
+          logger.info('chat', 'Auto-agent create → confirm sandbox for write', {
+            goalPreview: goalText.slice(0, 80),
+          });
+          resolved = await resolveWorkspace({
+            episodeId,
+            goal: goalText,
+            explicitFsScope: null,
+            workspaceMode: 'edit',
+            dryRun: false,
+          });
+          resolvedMode = 'edit';
+          ({ toolsWhitelist } = resolveToolsWhitelistForMode({
+            goal: goalText,
+            workspaceModeInput: 'edit',
+          }));
+        } else {
+          logger.info('chat', 'Auto-agent Edit without project — downgrade to Explore', {
+            goalPreview: goalText.slice(0, 80),
+          });
+          resolvedMode = 'explore';
+          ({ toolsWhitelist } = resolveToolsWhitelistForMode({
+            goal: goalText,
+            workspaceModeInput: 'explore',
+          }));
+          resolved = await resolveWorkspace({
+            episodeId,
+            goal: goalText,
+            explicitFsScope: null,
+            workspaceMode: 'explore',
+          });
+        }
       }
 
       const task = await createAgentTask({
         episodeId,
         goal: goalText,
+        templateName: isCodeCreationGoal(goalText) ? 'coder' : null,
         fsScope: resolved.fsScope,
         toolsWhitelist,
         maxSteps: tierParams.agentMaxSteps,

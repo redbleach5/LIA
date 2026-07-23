@@ -21,7 +21,7 @@ export type AgentEvent =
   | { type: 'task_synthesizing'; taskId: string; ts: number }
   | { type: 'task_done'; taskId: string; resultSummary: string; chatMessageId?: string; ts: number }
   | { type: 'task_failed'; taskId: string; error: string; chatMessageId?: string; ts: number }
-  | { type: 'task_cancelled'; taskId: string; ts: number }
+  | { type: 'task_cancelled'; taskId: string; chatMessageId?: string; ts: number }
   | { type: 'artifact_saved'; taskId: string; step: number; filename: string; url: string; ts: number }
   | { type: 'file_changed'; taskId: string; step: number; changeId: string; path: string; tool: 'edit_file' | 'write_file'; diff?: string; canUndo: boolean; ts: number }
   | {

@@ -289,11 +289,100 @@ export function serializeProjectDesign(design: ProjectDesign): string {
   return `${JSON.stringify(design, null, 2)}\n`;
 }
 
-/** Local preview URL for iframe (localhost only). */
-export function previewUrlForDesign(design: ProjectDesign): string | null {
+/** Minimal design shape for preview URL (client + server). */
+export type PreviewDesignLike = {
+  entry?: string;
+  preview: { type: string; port?: number; url?: string };
+};
+
+/** True when entry is a browser-servable HTML document (not SPA/source/API entry). */
+export function isBrowserPreviewEntry(entry: string | undefined | null): boolean {
+  if (!entry || typeof entry !== 'string') return false;
+  const normalized = entry.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  return /\.html?$/i.test(normalized);
+}
+
+/**
+ * Relative FS path of the HTML document that iframe preview must serve.
+ * Null when preview is not iframe-HTML (SPA uses `/`, terminal has no document).
+ */
+export function previewEntryRelativePath(design: PreviewDesignLike): string | null {
+  if (design.preview.type !== 'iframe') return null;
+  if (!isBrowserPreviewEntry(design.entry)) return null;
+  return design.entry!.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+}
+
+/**
+ * Path portion of the iframe preview URL.
+ * HTML entry → `/index.html`; SPA/API source entry → `/`.
+ */
+export function previewDocumentPath(design: PreviewDesignLike): string {
+  const rel = previewEntryRelativePath(design);
+  return rel ? `/${rel}` : '/';
+}
+
+function previewOrigin(design: PreviewDesignLike): string | null {
   if (design.preview.type !== 'iframe' || !design.preview.port) return null;
-  if (design.preview.url?.startsWith('http://127.0.0.1') || design.preview.url?.startsWith('http://localhost')) {
-    return design.preview.url;
+  const raw = design.preview.url;
+  if (
+    typeof raw === 'string'
+    && (raw.startsWith('http://127.0.0.1') || raw.startsWith('http://localhost'))
+  ) {
+    try {
+      const u = new URL(raw);
+      return `${u.protocol}//${u.host}`;
+    } catch {
+      /* fall through */
+    }
   }
   return `http://127.0.0.1:${design.preview.port}`;
+}
+
+/** Join origin + document path without double slashes. */
+export function joinPreviewOriginPath(origin: string, docPath: string): string {
+  const base = origin.replace(/\/+$/, '');
+  if (!docPath || docPath === '/') return `${base}/`;
+  return `${base}${docPath.startsWith('/') ? docPath : `/${docPath}`}`;
+}
+
+/** HTML document path from preview URL (e.g. /index.html → index.html). */
+export function htmlEntryFromPreviewUrl(previewUrl: string | null | undefined): string | null {
+  if (!previewUrl) return null;
+  try {
+    const path = new URL(previewUrl).pathname.replace(/^\/+/, '');
+    if (path && /\.html?$/i.test(path)) return path;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/**
+ * Local preview URL for iframe (localhost only).
+ * Uses design.entry when it is an HTML document; otherwise origin `/` (Vite SPA).
+ */
+export function previewUrlForDesign(design: PreviewDesignLike): string | null {
+  if (design.preview.type !== 'iframe' || !design.preview.port) return null;
+
+  const docPath = previewDocumentPath(design);
+  const raw = design.preview.url;
+  if (
+    typeof raw === 'string'
+    && (raw.startsWith('http://127.0.0.1') || raw.startsWith('http://localhost'))
+  ) {
+    try {
+      const u = new URL(raw);
+      // Explicit non-root path in preview.url wins (agent/override).
+      if (u.pathname && u.pathname !== '/') {
+        return raw;
+      }
+      return joinPreviewOriginPath(`${u.protocol}//${u.host}`, docPath);
+    } catch {
+      return raw;
+    }
+  }
+
+  const origin = previewOrigin(design);
+  if (!origin) return null;
+  return joinPreviewOriginPath(origin, docPath);
 }

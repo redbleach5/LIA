@@ -23,6 +23,7 @@
 
 import { useEffect, useState } from 'react';
 import { useChatStore } from '@/stores/chat-store';
+import { displayAgentGoal } from '@/lib/agent/goal-display';
 import {
   Lightbulb,
   Loader2,
@@ -240,11 +241,18 @@ export function AgentThoughtBubble() {
     bubbleText = 'Не получилось';
     bubbleSubtext = error.slice(0, 100);
   } else if (status === 'planning') {
-    bubbleText = plan?.goal ? plan.goal.slice(0, 90) : 'Составляю план…';
+    const g = plan?.goal ? displayAgentGoal(plan.goal) : '';
+    bubbleText = g ? g.slice(0, 90) : 'Составляю план…';
   } else if (status === 'synthesizing') {
     bubbleText = 'Собираю ответ…';
   } else if (currentStep?.thought) {
-    bubbleText = currentStep.thought.split(/[.!?\n]/)[0].slice(0, 100);
+    // Skip regurgitated system/template lines in the first sentence.
+    const thoughtLine = currentStep.thought
+      .split(/\n/)
+      .map(l => l.trim())
+      .find(l => l && !/^(ты —|правила:|стратегия:|---+$|##\s)/i.test(l))
+      ?? currentStep.thought;
+    bubbleText = thoughtLine.split(/[.!?]/)[0].slice(0, 100);
     const actionLabel = describeAction(currentStep.action);
     if (actionLabel) bubbleSubtext = actionLabel;
   } else if (currentStep?.action) {

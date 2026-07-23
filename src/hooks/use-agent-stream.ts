@@ -260,8 +260,17 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
         },
       );
     },
-    task_cancelled: () => {
-      applyTerminalStatus(ctx, 'cancelled', {});
+    task_cancelled: (e) => {
+      const data = parseEventData(e) ?? {};
+      applyTerminalStatus(
+        ctx,
+        'cancelled',
+        {},
+        {
+          chatMessageId: data.chatMessageId ? String(data.chatMessageId) : undefined,
+          chatContent: 'Задача отменена.',
+        },
+      );
     },
     artifact_saved: (e) => {
       const data = parseEventData(e);
@@ -463,7 +472,12 @@ export function useAgentStream() {
             );
             stopPolling();
           } else if (task.status === 'cancelled') {
-            applyTerminalStatus(ctx, 'cancelled', {});
+            applyTerminalStatus(
+              ctx,
+              'cancelled',
+              {},
+              { chatContent: 'Задача отменена.' },
+            );
             stopPolling();
           } else {
             useChatStore.getState().setActiveTaskStatus(task.status);
@@ -530,12 +544,18 @@ export function useAgentStream() {
             void hydrateCreateRuntimeStudio(activeId);
           }
         } else {
-          // After F5 with no persisted active: prefer in-flight task, else latest with sandbox.
+          // After F5 with no persisted active: prefer in-flight task, else latest
+          // with sandbox, else latest finished task (so result can re-mirror to chat).
           const running = tasks.find(t =>
             t.status === 'executing' || t.status === 'planning' || t.status === 'waiting_input' || t.status === 'synthesizing',
           );
           const withScope = tasks.find(t => Boolean(t.fsScope));
-          const pick = running ?? withScope ?? null;
+          const withResult = tasks.find(t =>
+            (t.status === 'done' && Boolean(t.resultSummary))
+            || t.status === 'failed'
+            || t.status === 'cancelled',
+          );
+          const pick = running ?? withScope ?? withResult ?? null;
           if (pick) store.setActiveTask(pick.id);
         }
       } catch (e) {

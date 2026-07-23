@@ -4,6 +4,9 @@ import {
   parseProjectDesignJson,
   serializeProjectDesign,
   previewUrlForDesign,
+  previewDocumentPath,
+  previewEntryRelativePath,
+  htmlEntryFromPreviewUrl,
   PROJECT_MANIFEST_FILENAME,
 } from '@/lib/agent/runtime/project-manifest';
 import { inferProjectDesign, designNeedsRuntimeVerify } from '@/lib/agent/runtime/infer-design';
@@ -30,8 +33,11 @@ import {
   designFromPreset,
   isLockedPreset,
   resolveCreatePresetId,
+  buildStaticWebDesign,
+  buildViteReactDesign,
+  buildNodeApiDesign,
 } from '@/lib/agent/runtime/presets';
-import { probeHttpUrl } from '@/lib/agent/runtime/health';
+import { probeHttpUrl, isDirectoryListingHtml } from '@/lib/agent/runtime/health';
 
 describe('Create Runtime — design + manifest', () => {
   it('infers HTML canvas game design with iframe preview', () => {
@@ -60,7 +66,7 @@ describe('Create Runtime — design + manifest', () => {
     const json = serializeProjectDesign(parsed.design);
     const again = parseProjectDesignJson(json);
     expect(again.ok).toBe(true);
-    expect(previewUrlForDesign(parsed.design)).toBe('http://127.0.0.1:5173');
+    expect(previewUrlForDesign(parsed.design)).toBe('http://127.0.0.1:5173/index.html');
   });
 
   it('coerces iframe design without port to default 5173', () => {
@@ -314,7 +320,7 @@ describe('Create Runtime — HTTP health', () => {
     const ok = await probeHttpUrl('http://127.0.0.1:9/', {
       timeoutMs: 50,
       pollMs: 10,
-      fetchImpl: (async () => new Response('hi', { status: 200 })) as typeof fetch,
+      fetchImpl: (async () => new Response('<html><body>hi</body></html>', { status: 200 })) as typeof fetch,
     });
     expect(ok.ok).toBe(true);
 
@@ -325,6 +331,98 @@ describe('Create Runtime — HTTP health', () => {
     });
     expect(bad.ok).toBe(false);
     expect(bad.error).toMatch(/404/);
+  });
+
+  it('rejects directory listing bodies even with HTTP 200', async () => {
+    expect(isDirectoryListingHtml('<html><title>Index of /task-123</title><a href="a">a</a></html>')).toBe(true);
+    expect(isDirectoryListingHtml('<html><body><h1>Hello</h1></body></html>')).toBe(false);
+    expect(isDirectoryListingHtml('{"ok":true}')).toBe(false);
+
+    const listing = await probeHttpUrl('http://127.0.0.1:9/', {
+      timeoutMs: 80,
+      pollMs: 20,
+      fetchImpl: (async () =>
+        new Response('<html><title>Index of /task-abc</title><ul><li><a href="x">x</a></li></ul></html>', {
+          status: 200,
+        })) as typeof fetch,
+    });
+    expect(listing.ok).toBe(false);
+    expect(listing.error).toMatch(/directory listing|точки входа/i);
+
+    const jsonOk = await probeHttpUrl('http://127.0.0.1:9/health', {
+      timeoutMs: 50,
+      pollMs: 10,
+      fetchImpl: (async () => new Response('{"status":"ok"}', { status: 200 })) as typeof fetch,
+    });
+    expect(jsonOk.ok).toBe(true);
+  });
+});
+
+describe('Create Runtime — preview URL + entry contract', () => {
+  it('static-web uses entry path in preview URL', () => {
+    const d = buildStaticWebDesign('site');
+    expect(previewDocumentPath(d)).toBe('/index.html');
+    expect(previewUrlForDesign(d)).toBe('http://127.0.0.1:5173/index.html');
+    expect(previewEntryRelativePath(d)).toBe('index.html');
+    expect(htmlEntryFromPreviewUrl(previewUrlForDesign(d))).toBe('index.html');
+  });
+
+  it('vite-react keeps origin / (entry is source, not document)', () => {
+    const d = buildViteReactDesign('app');
+    expect(d.entry).toBe('src/App.tsx');
+    expect(previewDocumentPath(d)).toBe('/');
+    expect(previewUrlForDesign(d)).toBe('http://127.0.0.1:5173/');
+    expect(previewEntryRelativePath(d)).toBeNull();
+    expect(htmlEntryFromPreviewUrl(previewUrlForDesign(d))).toBeNull();
+  });
+
+  it('node-api has no iframe preview URL', () => {
+    const d = buildNodeApiDesign('api');
+    expect(d.preview.type).toBe('terminal');
+    expect(previewUrlForDesign(d)).toBeNull();
+    expect(previewEntryRelativePath(d)).toBeNull();
+  });
+
+  it('custom html entry maps to preview path', () => {
+    const d = {
+      ...buildStaticWebDesign('x'),
+      entry: 'hello.html',
+    };
+    expect(previewUrlForDesign(d)).toBe('http://127.0.0.1:5173/hello.html');
+    expect(previewEntryRelativePath(d)).toBe('hello.html');
+  });
+
+  it('explicit preview.url with path is preserved', () => {
+    const d = {
+      ...buildStaticWebDesign('x'),
+      preview: { type: 'iframe' as const, port: 5173, url: 'http://127.0.0.1:5173/custom.html' },
+    };
+    expect(previewUrlForDesign(d)).toBe('http://127.0.0.1:5173/custom.html');
+  });
+});
+
+describe('Create Runtime — HTML preview preflight', () => {
+  it('fails when html entry file is missing; skips for SPA origin URL', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { assertHtmlPreviewEntryExists } = await import('@/lib/agent/runtime/process-supervisor');
+
+    const cwd = await mkdtemp(join(tmpdir(), 'lia-preview-'));
+    try {
+      const missing = await assertHtmlPreviewEntryExists(cwd, 'http://127.0.0.1:5173/index.html');
+      expect(missing.ok).toBe(false);
+      if (!missing.ok) expect(missing.error).toMatch(/index\.html/);
+
+      const spa = await assertHtmlPreviewEntryExists(cwd, 'http://127.0.0.1:5173/');
+      expect(spa.ok).toBe(true);
+
+      await writeFile(join(cwd, 'index.html'), '<html></html>', 'utf8');
+      const ok = await assertHtmlPreviewEntryExists(cwd, 'http://127.0.0.1:5173/index.html');
+      expect(ok.ok).toBe(true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
 

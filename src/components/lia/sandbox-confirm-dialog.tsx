@@ -49,6 +49,7 @@ export function SandboxConfirmDialog() {
           autoStart: true,
           workspaceMode,
           confirmSandbox: true,
+          forceAgent: true,
           ...(template ? { template } : {}),
         }),
       });

@@ -110,6 +110,11 @@ export const createAgentTaskSchema = z.object({
   workspaceMode: z.enum(['auto', 'read', 'explore', 'edit']).default('auto'),
   /** Confirm writing into an empty sandbox when Edit has no project/KB path. */
   confirmSandbox: z.boolean().optional(),
+  /**
+   * Skip agent intent gate (chat/ask deferral). Used after user confirms
+   * «Запустить агента» on an ambiguous goal, or for trusted follow-ups.
+   */
+  forceAgent: z.boolean().optional(),
 });
 
 // POST /api/agent/[id]/input

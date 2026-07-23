@@ -35,22 +35,30 @@ export const createEpisodesSlice: StateCreator<
     episodes: s.episodes.filter(e => e.id !== id),
     currentEpisodeId: s.currentEpisodeId === id ? null : s.currentEpisodeId,
   })),
-  // setCurrentEpisode сбрасывает messages + активный агент/sandbox —
-  // иначе SSE/пульс/Esc «живут» в новом чате от задачи предыдущего.
-  setCurrentEpisode: (id) => set({
-    currentEpisodeId: id,
-    messages: [],
-    messagesHasMore: false,
-    messagesLoadingOlder: false,
-    pendingSandboxConfirm: null,
-    activeTaskId: null,
-    activeTaskStatus: null,
-    activeTaskPlan: null,
-    activeTaskSteps: [],
-    activeTaskQuestion: null,
-    activeTaskResult: null,
-    activeTaskError: null,
-    activeTaskArtifacts: [],
-    activeTaskFileChanges: [],
+  // setCurrentEpisode сбрасывает messages.
+  // Same-episode re-select (F5): keep activeTaskId so SSE can rehydrate result.
+  // Different episode: clear active agent so UI does not leak across chats.
+  setCurrentEpisode: (id) => set((s) => {
+    const sameEpisode = s.currentEpisodeId === id && id != null;
+    return {
+      currentEpisodeId: id,
+      messages: [],
+      messagesHasMore: false,
+      messagesLoadingOlder: false,
+      pendingSandboxConfirm: null,
+      pendingAgentRouteConfirm: null,
+      activeTaskId: sameEpisode ? s.activeTaskId : null,
+      activeTaskStatus: sameEpisode ? s.activeTaskStatus : null,
+      activeTaskPlan: null,
+      activeTaskSteps: [],
+      activeTaskQuestion: null,
+      activeTaskResult: null,
+      activeTaskError: null,
+      activeTaskArtifacts: [],
+      activeTaskFileChanges: [],
+      activeTaskDesign: null,
+      activeTaskRuntimeLogs: [],
+      activeTaskRuntime: null,
+    };
   }),
 });

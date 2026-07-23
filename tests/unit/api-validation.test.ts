@@ -116,6 +116,20 @@ describe('parseBody', () => {
     expect(result.data.autoStart).toBe(true);
   });
 
+  it('accepts forceAgent on createAgentTaskSchema', async () => {
+    const result = await parseBody(
+      jsonRequest('http://localhost/api/agent', {
+        episodeId: 'ep-1',
+        goal: 'привет',
+        forceAgent: true,
+      }),
+      createAgentTaskSchema,
+    );
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.forceAgent).toBe(true);
+  });
+
   it('rejects agent input longer than 10000 chars', async () => {
     const result = await parseBody(
       jsonRequest('http://localhost/api/agent/x/input', { answer: 'x'.repeat(10_001) }),

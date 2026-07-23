@@ -40,6 +40,7 @@ import { emitAgentEvent, signalCancellation, cancelWaiting } from './events';
 import { waitForUserInput, type AgentCheckpoint } from './wait-input';
 import { getMessages } from '@/lib/memory/episodes';
 import { remember } from '@/lib/memory/vector';
+import { displayAgentGoal, withTemplateOverlay } from './goal-display';
 import {
   truncateObservationForPrompt,
   truncateObservationForSynthesis,
@@ -257,7 +258,11 @@ export async function resumeFromCheckpoint(
     emitAgentEvent({
       type: 'task_plan_ready',
       taskId,
-      plan: { goal: plan.goal, steps: plan.steps, complexity: plan.complexity },
+      plan: {
+        goal: displayAgentGoal(plan.goal) || displayAgentGoal(task.goal),
+        steps: plan.steps,
+        complexity: plan.complexity,
+      },
       ts: Date.now(),
     });
 
@@ -692,7 +697,7 @@ function resolveFallbackPlanKind(task: AgentTask): FallbackPlanKind {
 export function fallbackPlan(task: AgentTask): AgentPlan {
   const base = FALLBACK_PLANS[resolveFallbackPlanKind(task)];
   return {
-    goal: task.goal,
+    goal: displayAgentGoal(task.goal),
     steps: base.steps,
     needsTools: base.needsTools,
     complexity: base.complexity,
@@ -748,7 +753,7 @@ export async function generatePlan(
     ? `- Follow-up по артефакту: сначала list_tree/read_file в текущем sandbox, потом правка, затем runtime_start. Запрещено начинать с list_sources или ask_user.`
     : '';
 
-  const systemPrompt = `Ты — планировщик задач для агента Лии.
+  const systemPrompt = withTemplateOverlay(`Ты — планировщик задач для агента Лии.
 Проанализируй задачу пользователя и составь пошаговый план выполнения.
 Учитывай доступные инструменты:
 ${toolDescriptions}
@@ -770,7 +775,7 @@ ${fixHint}
 ${fsHint}
 
 Верни СТРОГО JSON вида:
-{"goal":"...","steps":["строка шага 1","строка шага 2"],"needsTools":true,"complexity":"medium"}`;
+{"goal":"...","steps":["строка шага 1","строка шага 2"],"needsTools":true,"complexity":"medium"}`, task.systemOverlay);
 
   try {
     logger.debug('agent', 'Plan generation: calling LLM', { maxTokens: PLANNING_MAX_TOKENS });
@@ -782,7 +787,7 @@ ${fsHint}
     const result = await streamText({
       model,
       system: systemPrompt,
-      messages: [{ role: 'user', content: `Задача: "${task.goal}"` }],
+      messages: [{ role: 'user', content: `Задача: "${displayAgentGoal(task.goal)}"` }],
       temperature: PLANNING_TEMPERATURE,
       maxOutputTokens: PLANNING_MAX_TOKENS,
       abortSignal: AbortSignal.any([taskSignal, AbortSignal.timeout(LLM_TIMEOUT_MS)]),
@@ -887,6 +892,8 @@ ${fsHint}
       validated.data.steps = meaningful;
     }
 
+    // Never leak template/system text into plan.goal (UI + further prompts).
+    validated.data.goal = displayAgentGoal(validated.data.goal) || displayAgentGoal(task.goal);
     return validated.data;
   } catch (e) {
     logger.warn('agent', 'Plan generation failed — using fallback', { goal: task.goal.slice(0, 80) }, e);
@@ -918,9 +925,11 @@ export function buildStepMessages(
     || (!!task.fsScope && !isSandboxFsScope(task.fsScope));
   const isLiaWorkspace = isProjectRootFsScope(task.fsScope);
   const fsHint = describeFsScopeForPrompt(task.fsScope, task.goal);
+  const userGoal = displayAgentGoal(task.goal);
+  const planGoal = displayAgentGoal(plan.goal) || userGoal;
 
-  const systemPrompt = isKbGoal
-    ? `Ты — агент Лия. Задача (поиск в базе знаний): "${task.goal}"
+  const baseSystem = isKbGoal
+    ? `Ты — агент Лия. Задача (поиск в базе знаний): "${userGoal}"
 
 План:
 ${planStr}
@@ -939,9 +948,9 @@ ${fsHint}
 - ГОТОВО: только отдельной строкой, когда есть достаточно текста с citation (после get_source / read_folder_file, не после одного короткого search)
 - ask_user — только если цель неоднозначна (неясно ЧТО искать); не спрашивай «какой проект», если источники уже в контексте
 - Не повторяй одни и те же вызовы`
-    : `Ты — агент Лия. Выполняешь задачу: "${task.goal}"
+    : `Ты — агент Лия. Выполняешь задачу: "${userGoal}"
 
-План:
+План (${planGoal}):
 ${planStr}
 
 Доступные инструменты:
@@ -975,6 +984,8 @@ ${isExploration
 - "ГОТОВО: <резюме>" или "DONE: <summary>" — только отдельной строкой и только если цель реально закрыта
 - ask_user — только при настоящей неоднозначности цели; не спрашивай из‑за пустого sandbox
 - Ошибки инструментов: смени подход; каждый шаг должен приближать к цели`;
+
+  const systemPrompt = withTemplateOverlay(baseSystem, task.systemOverlay);
 
   const userPrompt = `Предыдущие шаги:
 ${stepsStr}
@@ -1327,13 +1338,13 @@ export async function synthesize(
 От первого лица. ${GROUNDING.noFabricateFromSteps} До 400 слов.`;
 
   const userPrompt = useGroundedKb
-    ? `Задача: "${task.goal}"
+    ? `Задача: "${displayAgentGoal(task.goal)}"
 
 EVIDENCE:
 ${stepsBlock}`
-    : `Задача: "${task.goal}"
+    : `Задача: "${displayAgentGoal(task.goal)}"
 
-План: ${plan.goal}
+План: ${displayAgentGoal(plan.goal) || displayAgentGoal(task.goal)}
 
 Контекст диалога (что обсуждалось раньше):
 ${dialogueBlock}

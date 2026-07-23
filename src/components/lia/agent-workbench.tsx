@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useChatStore } from '@/stores/chat-store';
 import { isAgentBusyStatus } from '@/lib/agent/task-status-ui';
+import { previewUrlForDesign } from '@/lib/agent/runtime/project-manifest';
 import { cn } from '@/lib/utils';
 import { AgentThoughtBubble } from './agent-thought-bubble';
 import { AgentWaitingPrompt } from './agent-waiting-prompt';
@@ -400,7 +401,7 @@ function PreviewTab({
 }) {
   const [busyAction, setBusyAction] = useState<'stop' | 'restart' | null>(null);
   const url = runtime?.previewUrl
-    ?? (design?.preview?.port ? `http://127.0.0.1:${design.preview.port}` : null);
+    ?? (design ? previewUrlForDesign(design) : null);
   const canIframe = design?.preview?.type === 'iframe' || Boolean(runtime?.previewUrl);
   const healthy = runtime?.status === 'healthy' || runtime?.status === 'running';
 

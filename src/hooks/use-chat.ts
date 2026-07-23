@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useChatStore, type ChatMessage, type ChatMode, type ChatAttachmentMeta } from '@/stores/chat-store';
 import { normalizeChatMode } from '@/lib/chat-modes';
-import { isAgentTask } from '@/lib/task-complexity';
+import { classifyAgentRoute, hasAgentWorkIntent } from '@/lib/agent/route-intent';
 import { isOpenOrShowArtifactGoal, isFixOrDebugArtifactGoal } from '@/lib/agent/artifact-followup-client';
 import { beginChatStream, endChatStream } from '@/lib/chat/client-stream-control';
 import { parseStreamErrorPayload } from '@/lib/chat/stream-error';
@@ -131,10 +131,16 @@ export function useChat() {
       toast.info('Сначала подтверди или отмени запись в sandbox.');
       return;
     }
+    if (state.pendingAgentRouteConfirm) {
+      toast.info('Сначала выбери: диалог или агент.');
+      return;
+    }
 
     const uiMode = normalizeChatMode(mode);
     let effectiveMode: ChatMode = uiMode;
-    const wantsAutoAgent = uiMode === 'auto' && isAgentTask(trimmed);
+    /** API mode for chat pipeline (may be auto when Agent defers to chat). */
+    let chatApiMode: ChatMode = uiMode;
+    const wantsAutoAgent = uiMode === 'auto' && hasAgentWorkIntent(trimmed);
 
     if (wantsAutoAgent && !softFollowUp) {
       effectiveMode = 'agent';
@@ -154,81 +160,126 @@ export function useChat() {
         return;
       }
 
-      agentCreateInFlightRef.current = true;
-      setAgentCreating(true);
+      // Intent gate: Agent = capability preference, not forced ReAct.
+      // Trusted follow-ups / auto-agent heuristics skip the gate.
+      const skipGate = fixFollowUp || wantsAutoAgent;
+      const route = skipGate ? 'agent' as const : classifyAgentRoute(trimmed);
 
-      // Save user message to UI
-      const userMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: trimmed,
-        createdAt: Date.now(),
-      };
-      useChatStore.getState().addMessage(userMsg);
-
-      try {
-        const workspaceMode = useChatStore.getState().agentWorkspaceMode;
-        const res = await fetch('/api/agent', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            episodeId,
-            goal: trimmed,
-            autoStart: true,
-            workspaceMode,
-            fsScope: undefined,
-          }),
+      if (route === 'chat') {
+        // Answer via chat; keep UI mode sticky on Agent.
+        effectiveMode = 'auto';
+        chatApiMode = 'auto';
+      } else if (route === 'ask') {
+        const userMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: trimmed,
+          createdAt: Date.now(),
+        };
+        useChatStore.getState().addMessage(userMsg);
+        useChatStore.getState().setPendingAgentRouteConfirm({
+          goal: trimmed,
+          workspaceMode: useChatStore.getState().agentWorkspaceMode,
+          userMessageId: userMsg.id,
         });
-        if (res.status === 409) {
-          const err = await res.json().catch(() => ({}));
-          if (err.error === 'sandbox_confirm_required') {
-            useChatStore.getState().setPendingSandboxConfirm({
+        return;
+      } else {
+        agentCreateInFlightRef.current = true;
+        setAgentCreating(true);
+
+        // Save user message to UI
+        const userMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: trimmed,
+          createdAt: Date.now(),
+        };
+        useChatStore.getState().addMessage(userMsg);
+
+        try {
+          const workspaceMode = useChatStore.getState().agentWorkspaceMode;
+          const res = await fetch('/api/agent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              episodeId,
               goal: trimmed,
+              autoStart: true,
               workspaceMode,
-              userMessageId: userMsg.id,
-              source: 'chat',
-            });
+              fsScope: undefined,
+              ...(skipGate ? { forceAgent: true } : {}),
+            }),
+          });
+          if (res.status === 409) {
+            const err = await res.json().catch(() => ({}));
+            if (err.error === 'sandbox_confirm_required') {
+              useChatStore.getState().setPendingSandboxConfirm({
+                goal: trimmed,
+                workspaceMode,
+                userMessageId: userMsg.id,
+                source: 'chat',
+              });
+              return;
+            }
+            if (err.error === 'agent_route_confirm_required') {
+              useChatStore.getState().setPendingAgentRouteConfirm({
+                goal: trimmed,
+                workspaceMode,
+                userMessageId: userMsg.id,
+              });
+              return;
+            }
+            throw new Error(err.message || err.error || 'HTTP 409');
+          }
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: 'request failed' }));
+            throw new Error(err.error || `HTTP ${res.status}`);
+          }
+          const data = await res.json();
+          if (data.type === 'defer_to_chat') {
+            // Server gate: fall through to chat with existing optimistic message.
+            // Remove optimistic user msg — chat path will re-add it cleanly.
+            useChatStore.getState().removeMessage(userMsg.id);
+            effectiveMode = 'auto';
+            chatApiMode = 'auto';
+            // Continue below into chat pipeline (do not return).
+          } else {
+            const task = data.task;
+            if (task) {
+              if (wantsAutoAgent || uiMode === 'agent') {
+                useChatStore.getState().setMode('agent');
+                if (wantsAutoAgent) {
+                  toast.info('Переключилась в режим Агента', {
+                    description: 'Многошаговые задачи выполняются с планом и инструментами.',
+                  });
+                }
+              }
+              // addAgentTask before setActiveTask so SSE subscribe can read episodeId.
+              useChatStore.getState().addAgentTask(task);
+              useChatStore.getState().setActiveTask(task.id);
+              // Align optimistic user message id with DB if server persisted the goal.
+              if (data.userMessageId && typeof data.userMessageId === 'string') {
+                useChatStore.setState((s) => ({
+                  messages: s.messages.map(m =>
+                    m.id === userMsg.id ? { ...m, id: data.userMessageId as string } : m,
+                  ),
+                }));
+              }
+            }
             return;
           }
-          throw new Error(err.message || err.error || 'HTTP 409');
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error('[useChat] agent create failed:', e);
+          toast.error(`Не удалось создать задачу: ${msg}`);
+          useChatStore.getState().removeMessage(userMsg.id);
+          return;
+        } finally {
+          agentCreateInFlightRef.current = false;
+          setAgentCreating(false);
         }
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: 'request failed' }));
-          throw new Error(err.error || `HTTP ${res.status}`);
-        }
-        const data = await res.json();
-        const task = data.task;
-        if (task) {
-          if (wantsAutoAgent || uiMode === 'agent') {
-            useChatStore.getState().setMode('agent');
-            if (wantsAutoAgent) {
-              toast.info('Переключилась в режим Агента', {
-                description: 'Многошаговые задачи выполняются с планом и инструментами.',
-              });
-            }
-          }
-          // addAgentTask before setActiveTask so SSE subscribe can read episodeId.
-          useChatStore.getState().addAgentTask(task);
-          useChatStore.getState().setActiveTask(task.id);
-          // Align optimistic user message id with DB if server persisted the goal.
-          if (data.userMessageId && typeof data.userMessageId === 'string') {
-            useChatStore.setState((s) => ({
-              messages: s.messages.map(m =>
-                m.id === userMsg.id ? { ...m, id: data.userMessageId as string } : m,
-              ),
-            }));
-          }
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error('[useChat] agent create failed:', e);
-        toast.error(`Не удалось создать задачу: ${msg}`);
-        useChatStore.getState().removeMessage(userMsg.id);
-      } finally {
-        agentCreateInFlightRef.current = false;
-        setAgentCreating(false);
+        // defer_to_chat falls through to chat below
       }
-      return;
     }
 
     // ── Диалог: streaming chat ──
@@ -266,7 +317,7 @@ export function useChat() {
         body: JSON.stringify({
           text: trimmed,
           episodeId,
-          mode: uiMode,
+          mode: chatApiMode,
           attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         }),
         signal: ac.signal,

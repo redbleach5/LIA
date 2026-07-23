@@ -42,8 +42,32 @@ export async function POST(req: NextRequest) {
   try {
     const parsed = await parseBody(req, createAgentTaskSchema);
     if (!parsed.success) return parsed.response;
-    let { episodeId, goal, autoStart, fsScope, toolsWhitelist, maxSteps, maxDurationSec, template, workspaceMode, confirmSandbox } = parsed.data;
+    let { episodeId, goal, autoStart, fsScope, toolsWhitelist, maxSteps, maxDurationSec, template, workspaceMode, confirmSandbox, forceAgent } = parsed.data;
     const userGoal = goal.trim();
+
+    // Intent gate: Agent mode is a capability preference, not a forced ReAct loop.
+    // Client should usually pre-route; this blocks bypasses (API / stale clients).
+    if (!forceAgent) {
+      const { classifyAgentRoute } = await import('@/lib/agent/route-intent');
+      const route = classifyAgentRoute(userGoal);
+      if (route === 'chat') {
+        logger.info('agent', 'Defer to chat (intent gate)', {
+          goalPreview: userGoal.slice(0, 80),
+        });
+        return NextResponse.json({
+          type: 'defer_to_chat',
+          reason: 'not_agent_work',
+          message: 'Сообщение лучше ответить в диалоге без агентского цикла.',
+        });
+      }
+      if (route === 'ask') {
+        return NextResponse.json({
+          error: 'agent_route_confirm_required',
+          message: 'Неоднозначная задача — подтверди запуск агента или ответь в диалоге.',
+          route: 'ask',
+        }, { status: 409 });
+      }
+    }
 
     // Create/implement goals → coder template (write_file pressure) unless caller set one.
     if (!template || template === 'general') {
@@ -59,16 +83,15 @@ export async function POST(req: NextRequest) {
     // P6-1 fix: apply template overrides if a non-'general' template is specified.
     // Template provides defaults for toolsWhitelist, maxSteps, maxDurationSec.
     // Caller-provided values (if any) take precedence over template defaults.
+    // System prompt stays OUT of goal — injected into LLM system channel only.
     let effectiveMaxSteps = maxSteps ?? null;
     let effectiveMaxDurationSec = maxDurationSec ?? null;
     let templateWhitelist: string[] | null = null;
-    let templateSystemPrompt = '';
 
     if (template && template !== 'general') {
       const { getTemplate } = await import('@/lib/agent/templates');
       const tmpl = getTemplate(template);
       templateWhitelist = tmpl.toolWhitelist;
-      templateSystemPrompt = tmpl.systemPrompt;
       if (effectiveMaxSteps === null) {
         effectiveMaxSteps = tmpl.maxSteps;
       }
@@ -160,13 +183,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Prepend template system prompt for researcher/coder presets.
-    if (templateSystemPrompt && template && template !== 'general') {
-      goal = `${templateSystemPrompt}\n\n## ЗАДАЧА\n${userGoal}`;
-    } else {
-      goal = userGoal;
-    }
-
+    // Cursor-like: keep goal = user text only. Template overlay lives on
+    // task.templateName → system channel in generatePlan / buildStepMessages.
     const resolvedMaxSteps = typeof effectiveMaxSteps === 'number'
       ? Math.min(tierParams.agentMaxSteps, Math.max(1, effectiveMaxSteps))
       : tierParams.agentMaxSteps;
@@ -182,7 +200,8 @@ export async function POST(req: NextRequest) {
 
     const task = await createAgentTask({
       episodeId,
-      goal,
+      goal: userGoal,
+      templateName: template && template !== 'general' ? template : null,
       toolsWhitelist: effectiveToolsWhitelist,
       fsScope: finalFsScope,
       maxSteps: resolvedMaxSteps,

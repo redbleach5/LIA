@@ -5,6 +5,7 @@ import 'server-only';
 
 import { readdir, stat } from 'fs/promises';
 import { listAgentTasks } from './task';
+import { displayAgentGoal } from './goal-display';
 export {
   isOpenOrShowArtifactGoal,
   isReferentialWorkspaceGoal,
@@ -45,7 +46,7 @@ export async function findRecentEpisodeFsScope(episodeId: string): Promise<{
     return {
       fsScope: t.fsScope,
       taskId: t.id,
-      goal: t.goal.replace(/^[\s\S]*## ЗАДАЧА\n/, '').slice(0, 200),
+      goal: displayAgentGoal(t.goal).slice(0, 200),
       files,
     };
   }

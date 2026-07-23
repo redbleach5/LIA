@@ -204,7 +204,15 @@ export function makeRuntimeStartTool(task: AgentTask) {
         ? '.'
         : await detectServeRoot(scoped.fullPath, treePaths);
       const serveScript = staticServeScript(designPort, serveRoot);
-      const previewUrl = `http://127.0.0.1:${designPort}`;
+      const previewUrl = loaded.ok
+        ? (previewUrlForDesign({
+            ...loaded.design,
+            preview: {
+              ...loaded.design.preview,
+              port: designPort,
+            },
+          }) ?? `http://127.0.0.1:${designPort}/index.html`)
+        : `http://127.0.0.1:${designPort}/index.html`;
 
       const hasPackageJson = await pathExists(join(scoped.fullPath, 'package.json'));
       const looksStatic = !hasPackageJson && (

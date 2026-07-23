@@ -47,6 +47,13 @@ export async function GET(
     }
 
     // Fetch limit+1 to detect hasMore without a separate COUNT.
+    // First page only: repair missing companion messages from finished agent tasks
+    // (live UI can show SSE mirrors that never landed in Message rows).
+    if (!cursor) {
+      const { backfillAgentResultsToChat } = await import('@/lib/agent/persist-to-chat');
+      await backfillAgentResultsToChat(id);
+    }
+
     const batch = await getMessages(id, limit + 1, cursor);
     const hasMore = batch.length > limit;
     // getMessages returns chronological (old→new). Extra oldest row proves more history.

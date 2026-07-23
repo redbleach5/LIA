@@ -5,6 +5,8 @@ import 'server-only';
 // ============================================================================
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createConnection } from 'node:net';
 import { scrubCommandEnv } from '../tools/run-command';
 import { emitAgentEvent } from '../events';
@@ -15,7 +17,7 @@ import type {
   RuntimeSessionSnapshot,
   RuntimeStatus,
 } from './types';
-import { previewUrlForDesign } from './project-manifest';
+import { htmlEntryFromPreviewUrl, previewUrlForDesign } from './project-manifest';
 import { parseRuntimeScript } from './script-parse';
 import type { ParsedScript } from './script-parse';
 import { normalizeRuntimeScript } from './script-normalize';
@@ -23,6 +25,7 @@ import { probeHttpUrl } from './health';
 
 export type { ParsedScript };
 export { parseRuntimeScript };
+export { htmlEntryFromPreviewUrl };
 
 const MAX_LOG_LINES = 400;
 const MAX_RESTARTS = 3;
@@ -112,9 +115,14 @@ function setStatus(session: Session, status: RuntimeStatus, lastError?: string |
   emitStatus(session);
 }
 
-async function probePort(port: number, timeoutMs: number): Promise<boolean> {
+async function probePort(
+  port: number,
+  timeoutMs: number,
+  shouldAbort?: () => boolean,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (shouldAbort?.()) return false;
     const ok = await new Promise<boolean>((resolve) => {
       const socket = createConnection({ host: '127.0.0.1', port }, () => {
         socket.end();
@@ -137,6 +145,38 @@ export async function probeLocalPort(port: number, timeoutMs = 600): Promise<boo
   return probePort(port, timeoutMs);
 }
 
+function sessionSpawnFailed(session: Session): boolean {
+  if (session.status === 'error' || session.status === 'stopped') return true;
+  if (!session.child) return true;
+  if (session.child.killed) return true;
+  // exitCode set when process already exited
+  if (session.child.exitCode != null) return true;
+  return false;
+}
+
+/**
+ * Before spawn: iframe HTML preview must have the entry file on disk,
+ * otherwise `serve` returns a directory listing and falsely looks "healthy".
+ */
+export async function assertHtmlPreviewEntryExists(
+  cwd: string,
+  previewUrl: string | null | undefined,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const entry = htmlEntryFromPreviewUrl(previewUrl);
+  if (!entry) return { ok: true };
+  try {
+    await access(join(cwd, entry));
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      error:
+        `Нет файла точки входа «${entry}» — Preview покажет листинг каталога. `
+        + `Сначала write_file ${entry}, затем runtime_start.`,
+    };
+  }
+}
+
 async function waitHealthy(session: Session): Promise<boolean> {
   if (!session.port) {
     // No port — treat as healthy if process still alive after short settle
@@ -148,9 +188,18 @@ async function waitHealthy(session: Session): Promise<boolean> {
     return false;
   }
 
-  // 1) Port must accept TCP
-  const portUp = await probePort(session.port, HEALTH_TIMEOUT_MS);
+  // 1) Port must accept TCP — abort early if spawn already failed (Windows ENOENT etc.)
+  const portUp = await probePort(
+    session.port,
+    HEALTH_TIMEOUT_MS,
+    () => sessionSpawnFailed(session),
+  );
   if (!portUp) {
+    if (sessionSpawnFailed(session) && session.lastError) {
+      // Keep spawn/exit error — don't overwrite with generic port timeout.
+      pushLog(session, 'system', session.lastError);
+      return false;
+    }
     setStatus(session, 'unhealthy', `Порт ${session.port} не отвечает за ${HEALTH_TIMEOUT_MS}ms`);
     pushLog(session, 'system', session.lastError ?? 'unhealthy');
     return false;
@@ -240,6 +289,24 @@ export async function startRuntime(input: StartRuntimeInput): Promise<StartRunti
     };
   }
 
+  const entryCheck = await assertHtmlPreviewEntryExists(input.cwd, input.previewUrl ?? null);
+  if (!entryCheck.ok) {
+    const session = ensureSession(input.taskId);
+    session.cwd = input.cwd;
+    session.port = input.port ?? null;
+    session.previewUrl = input.previewUrl ?? null;
+    setStatus(session, 'error', entryCheck.error);
+    pushLog(session, 'system', entryCheck.error);
+    return {
+      success: false,
+      status: 'error',
+      error: entryCheck.error,
+      port: input.port ?? null,
+      previewUrl: input.previewUrl ?? null,
+      restartCount: session.restartCount,
+    };
+  }
+
   const session = ensureSession(input.taskId);
   const prevCmd = `${session.command ?? ''} ${session.args.join(' ')}`.trim();
   const nextCmd = `${parsed.command} ${parsed.args.join(' ')}`.trim();
@@ -278,17 +345,34 @@ export async function startRuntime(input: StartRuntimeInput): Promise<StartRunti
   );
 
   try {
+    // Windows: npx/npm are .cmd shims — spawn without shell → ENOENT / EINVAL.
+    // Same pattern as scripts/db-init.mjs and build-standalone.mjs.
     const child = spawn(parsed.command, parsed.args, {
       cwd: input.cwd,
       env: scrubCommandEnv() as NodeJS.ProcessEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      shell: process.platform === 'win32',
     });
     attachChild(session, child);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     setStatus(session, 'error', msg);
     return { success: false, status: 'error', error: msg, restartCount: session.restartCount };
+  }
+
+  // Let spawn 'error' fire before we start waiting on the port.
+  await new Promise(r => setTimeout(r, 50));
+  if (sessionSpawnFailed(session) && session.lastError) {
+    return {
+      success: false,
+      status: session.status,
+      error: session.lastError,
+      pid: session.child?.pid ?? null,
+      port: session.port,
+      previewUrl: session.previewUrl,
+      restartCount: session.restartCount,
+    };
   }
 
   const healthy = await waitHealthy(session);

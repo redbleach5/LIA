@@ -3,6 +3,7 @@
 // Hydrate Create Runtime Studio (design / logs / preview) after reload or task select.
 
 import { useChatStore } from '@/stores/chat-store';
+import { previewUrlForDesign } from '@/lib/agent/runtime/project-manifest';
 import type { ProjectDesignLive, RuntimeLogLive, RuntimeStatusLive } from '@/stores/slices/types';
 
 type RuntimeApiPayload = {
@@ -41,6 +42,11 @@ function toDesignLive(raw: ProjectDesignLive): ProjectDesignLive {
   };
 }
 
+function designPreviewUrl(design: ProjectDesignLive | null | undefined): string | null {
+  if (!design) return null;
+  return previewUrlForDesign(design);
+}
+
 /** Apply GET /api/agent/:id/runtime payload into the active-task studio slices. */
 export function applyCreateRuntimeHydration(taskId: string, data: RuntimeApiPayload) {
   const store = useChatStore.getState();
@@ -61,18 +67,21 @@ export function applyCreateRuntimeHydration(taskId: string, data: RuntimeApiPayl
       scriptKey: data.snapshot.scriptKey ?? null,
     };
     // If process died but design has iframe port, still expose preview URL for reopen.
-    if (!runtime.previewUrl && data.design?.preview?.type === 'iframe' && data.design.preview.port) {
-      runtime.previewUrl = `http://127.0.0.1:${data.design.preview.port}`;
+    if (!runtime.previewUrl) {
+      runtime.previewUrl = designPreviewUrl(data.design) ?? designPreviewUrl(store.activeTaskDesign);
     }
     store.setActiveTaskRuntime(runtime);
-  } else if (data.design?.preview?.type === 'iframe' && data.design.preview.port) {
-    store.setActiveTaskRuntime({
-      status: 'idle',
-      port: data.design.preview.port,
-      previewUrl: `http://127.0.0.1:${data.design.preview.port}`,
-      pid: null,
-      lastError: null,
-    });
+  } else if (data.design) {
+    const url = designPreviewUrl(data.design);
+    if (url || data.design.preview?.type === 'iframe') {
+      store.setActiveTaskRuntime({
+        status: 'idle',
+        port: data.design.preview.port ?? null,
+        previewUrl: url,
+        pid: null,
+        lastError: null,
+      });
+    }
   }
 
   if (Array.isArray(data.logs) && data.logs.length > 0) {

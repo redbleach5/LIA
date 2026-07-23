@@ -179,7 +179,15 @@ export function makeRunCommandTool(task: AgentTask) {
       const started = Date.now();
 
       try {
-        const { stdout, stderr } = await execFileAsync(validated.command, validated.args, {
+        // Windows: npm/npx/yarn/pnpm/bun are .cmd shims — execFile without
+        // extension → ENOENT. Prefer *.cmd over shell:true to keep no-shell safety.
+        const command =
+          process.platform === 'win32'
+          && /^(npx|npm|yarn|pnpm|bun)$/i.test(validated.command)
+            ? `${validated.command}.cmd`
+            : validated.command;
+
+        const { stdout, stderr } = await execFileAsync(command, validated.args, {
           cwd: scoped.fullPath,
           timeout,
           maxBuffer: MAX_OUTPUT_CHARS * 2,

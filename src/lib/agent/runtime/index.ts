@@ -1,5 +1,17 @@
 export type { ProjectDesign, ProjectKind, PreviewType, RuntimeStatus, RuntimeLogLine, RuntimeSessionSnapshot } from './types';
-export { PROJECT_MANIFEST_FILENAME, parseProjectDesign, parseProjectDesignJson, serializeProjectDesign, previewUrlForDesign, projectDesignSchema } from './project-manifest';
+export {
+  PROJECT_MANIFEST_FILENAME,
+  parseProjectDesign,
+  parseProjectDesignJson,
+  serializeProjectDesign,
+  previewUrlForDesign,
+  previewDocumentPath,
+  previewEntryRelativePath,
+  isBrowserPreviewEntry,
+  joinPreviewOriginPath,
+  htmlEntryFromPreviewUrl,
+  projectDesignSchema,
+} from './project-manifest';
 export { inferProjectDesign, designNeedsRuntimeVerify } from './infer-design';
 export {
   resolveCreatePresetId,
@@ -11,4 +23,4 @@ export {
 } from './presets';
 export { stepsHaveRuntimeVerify } from './verify';
 export { parseRuntimeScript } from './script-parse';
-export { probeHttpUrl } from './health';
+export { probeHttpUrl, isDirectoryListingHtml } from './health';
