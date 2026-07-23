@@ -2,7 +2,7 @@
 //
 // Tier system (4 levels):
 //   micro    — ≤4B parameters, or CPU-only, or <8GB VRAM
-//   standard — 5-13B parameters, 8-24GB VRAM (deliberate on complex/research)
+//   standard — 5-13B parameters, 8-24GB VRAM (tools/maxTokens by complexity)
 //   plus     — 14-32B parameters, 24-80GB VRAM
 //   max      — 33B+ parameters, multi-GPU or 80GB+ VRAM
 //

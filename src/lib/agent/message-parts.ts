@@ -4,7 +4,7 @@
  * Shared (client + server). SSE AgentEvents reduce into parts[]; the chat
  * timeline renders ONLY from parts[] (workbench is a read-only mirror).
  *
- * See docs/drafts/AGENTIC-CHAT.md
+ * See docs/AGENTIC-CHAT.md
  */
 
 export type ToolCallStatus = 'pending' | 'running' | 'done' | 'error';

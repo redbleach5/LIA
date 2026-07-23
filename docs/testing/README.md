@@ -1,13 +1,13 @@
 # Стратегия тестирования
 
-> **Статус:** living document · **v3.5** (2026-07-22)  
+> **Статус:** living document · **v3.6** (2026-07-23)  
 > **Baseline:** `bun run test:ci` — основной gate
 
 ## Premise
 
 Лия v2 **не нуждается в переписывании**. Задача тестов — ловить регрессии в оркестраторах (chat pipeline, agent runner), не гоняться за 100% coverage.
 
-Agentic chat (Cursor-like): unit gate + manual OSS matrix — [`agentic-manual-matrix.md`](./agentic-manual-matrix.md), protocol [`docs/drafts/AGENTIC-CHAT.md`](../drafts/AGENTIC-CHAT.md).
+Agentic chat: unit gate + manual OSS matrix — [`agentic-manual-matrix.md`](./agentic-manual-matrix.md), protocol [`docs/AGENTIC-CHAT.md`](../AGENTIC-CHAT.md).
 
 ## Команды
 
@@ -15,7 +15,7 @@ Agentic chat (Cursor-like): unit gate + manual OSS matrix — [`agentic-manual-m
 |---------|------------|
 | `bun run test:ci` | **Основной gate** — vitest |
 | `bun run test` | Все тесты |
-| `bun run test -- tests/core` | Только контракты ядра (**175**) |
+| `bun run test -- tests/core` | Только контракты ядра (~**179**) |
 | `bun run test:safe:local` | Стоп Lia на `:3000` → тесты → restart (`run-tests-safe.mjs`) |
 
 `vitest.config.mts` подхватывает `.env` / default `DATABASE_URL` — локальный `test:ci` не требует ручного export (после `bun run setup` + `db:force-push`).
@@ -24,12 +24,12 @@ Agentic chat (Cursor-like): unit gate + manual OSS matrix — [`agentic-manual-m
 
 | Категория | Тестов (≈) | Что покрывает |
 |-----------|--------|---------------|
-| `tests/core/` | **175** | pipeline, agent runner, loop detector, deliberate/self-check, persist-turn, memory-recall, workspace/KB scope |
-| `tests/unit/` | **~437** | security utils, api-validation, fs-scope, module-integrity, kb-rollback, agent-template-presets, … |
+| `tests/core/` | **~179** | pipeline, agent runner, loop detector, deliberate/self-check, persist-turn, memory-recall, workspace/KB scope |
+| `tests/unit/` | — | security utils, api-validation, fs-scope, message-parts, agentic-chat-p2-p7, … |
 | `tests/kb/` | — | search, chunking, bm25, indexer, code-indexer |
 | `tests/integration/` | ~16+ | peripheral-smoke |
 | root (`paths`, `task-complexity`) | ~20 | paths, complexity classifier |
-| **Collected** | **838** (`bun run test:ci`, 2026-07-23) | pass-count зависит от БД/env |
+| **Collected** | **~868** (`bun run test`, 2026-07-23) | pass-count зависит от БД/env |
 
 ## Ядро — модули
 
@@ -38,10 +38,11 @@ Agentic chat (Cursor-like): unit gate + manual OSS matrix — [`agentic-manual-m
 | Chat pipeline | `pipeline.ts` + phases/stream/helpers | ✅ `chat-pipeline.test.ts` |
 | Agent runner | `runner.ts` + `runner-helpers.ts` | ✅ `agent-runner.test.ts` |
 | Loop detector | `loop-detector.ts` | ✅ |
-| Cognitive glue | deliberate (XOR monologue), persist-turn | ✅ |
+| Cognitive glue | deliberate helpers (runtime off), persist-turn | ✅ |
 | Streaming self-check | disabled (cannot revise streamed answer) | — |
 | Memory recall | vector, episodes, facts | ✅ `memory-recall.test.ts` |
 | Workspace / KB scope | workspace-scope, sandbox-plan, kb-step-utils | ✅ |
+| Message parts | `message-parts.ts` | ✅ `tests/unit/message-parts.test.ts` |
 
 Оркестраторы тонкие; рост LOC — в helpers. Не обновлять таблицу LOC на каждый PR.
 
@@ -68,3 +69,4 @@ Agentic chat (Cursor-like): unit gate + manual OSS matrix — [`agentic-manual-m
 | Test DB isolation (shared `db/custom.db`) | P3 |
 | Semantic loop branch в `detectLoop` | P3 |
 | Central `config.ts` для magic numbers | P3 |
+| Manual OSS matrix fill-in | P2 |

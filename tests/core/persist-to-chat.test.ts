@@ -5,6 +5,7 @@ vi.mock('server-only', () => ({}));
 const saveMessage = vi.fn();
 vi.mock('@/lib/memory/episodes', () => ({
   saveMessage: (...args: unknown[]) => saveMessage(...args),
+  autoTitleEpisode: vi.fn().mockResolvedValue(undefined),
 }));
 
 const findFirst = vi.fn();

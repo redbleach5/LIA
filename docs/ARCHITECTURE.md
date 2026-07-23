@@ -7,10 +7,10 @@
 │                         Browser (Client)                          │
 │  React 19 + Zustand (slices) + Tailwind 4 + shadcn/ui (Radix)   │
 │  ├── page.tsx (Client) → HomeShell → ClientBootstrap (episodes, health, agent SSE)
-│  ├── ChatPanel (IntersectionObserver auto-scroll)                │
-│  ├── AvatarColumn (VRM, PresenceStage, agent ring/bubble) │
+│  ├── ChatPanel (messages + AgentMessageParts + sticky bar + collapsed workbench) │
+│  ├── AvatarColumn (VRM, PresenceStage, agent status ring) │
 │  ├── HeaderStatus (чаты · образ · «Ещё»: KB, тема)              │
-│  ├── AgentWorkbench (ход / design / terminal / preview; правки/файлы по мере надобности) │
+│  ├── AgentWorkbench (Files / Runtime: design · terminal · preview · edits) │
 │  └── EpisodesSidebar (AlertDialog, cursor pagination)            │
 ├──────────────────────────────────────────────────────────────────┤
 │                      Next.js API Routes                           │
@@ -26,8 +26,8 @@
 │  └── proxy.ts (Next.js) → X-Forwarded-For + LIA_INTERNAL_TOKEN│
 ├──────────────────────────────────────────────────────────────────┤
 │                        Service Layer                              │
-│  ├── lib/chat/         pipeline + phases/stream/helpers, deliberate (self-check off) │
-│  ├── lib/agent/        runner + runner-helpers (ReAct, checkpoint, tools)│
+│  ├── lib/chat/         pipeline + phases/stream/helpers (monologue/deliberate LLM off) │
+│  ├── lib/agent/        runner + message-parts + tools + runtime/ (Create Runtime)│
 │  ├── lib/memory/       episodes, facts, vector (emotional record/recall off) │
 │  ├── lib/kb/           Knowledge Base (Phase 1-5+7)                │
 │  │   ├── chunkers/     document-chunker                          │
@@ -65,44 +65,42 @@
 User types message → ChatInput → useChat.sendMessage()
 
   ┌─ Agent mode ──────────────────────────────────────────────┐
-  │ POST /api/agent { goal, autoStart }                        │
+  │ POST /api/agent { goal, autoStart, applyMode? }            │
   │ → createAgentTask → runAgentTask (background)              │
-  │ → SSE /api/agent/[id]/stream (real-time updates)           │
-  │ → useAgentStream (ClientBootstrap) subscribes, updates store│
-  │ → useAgent / AgentWorkbench — cancel, input, правки, файлы │
+  │ → SSE /api/agent/[id]/stream → applyAgentPartEvent         │
+  │ → Companion bubble renders parts[] (AgentMessageParts)     │
+  │ → Sticky bar: status / Ask|Auto / rollback; Esc → cancel   │
+  │ → Workbench: optional Files/Runtime (collapsed by default) │
   └────────────────────────────────────────────────────────────┘
 
-  ┌─ Chat mode (auto | agent) ────────────────────────────────┐
+  ┌─ Chat mode (auto) ────────────────────────────────────────┐
   │ POST /api/chat { text, episodeId, mode }                   │
   │ → parseBody (zod) → runChatPipeline                        │
-  │ Agent routing: client → POST /api/agent (single authority) │
   │                                                            │
-  │ Pipeline steps:                                            │
-  │ 1.  preflight (Ollama health)                              │
+  │ Pipeline steps (TTFT-oriented):                            │
+  │ 1.  preflight (Ollama health, cached)                      │
   │ 2.  capability (getCognitiveParams, cached 1h)             │
-  │ 3.  complexity (classifyTaskComplexity, heuristic)         │
-  │ 4.  plan (planExecution: mode × tier × complexity)         │
+  │ 3.  complexity (classifyTaskComplexity)                    │
+  │ 4.  plan (planExecution — deliberate always false)         │
   │ 5.  perceive (emotion decay + keyword triggers)            │
   │ 6.  disagreement / ethicalBlock short-circuit              │
-  │ 7.  monologue XOR deliberate (at most one pre-call)        │
-  │ 8.  save user message + build context (facts, vector)      │
+  │ 7.  liaDecision = createFallbackDecision (no monologue LLM)│
+  │ 8.  save user message + build context (facts, vector;      │
+  │     skipRecall on trivial/simple / greetings)              │
   │ 9.  build system prompt + messages                         │
-  │ 10. streamText (main LLM, tools, onFinish callback)        │
+  │ 10. streamText (num_ctx from tier; tools gated)            │
   │ 11. response with metadata headers (-B64 for non-ASCII)    │
   │                                                            │
-  │ onFinish (background, non-blocking):                       │
+  │ onFinish (background):                                     │
   │ ├── saveMessage (companion)                                │
-  │ ├── remember (vector memory, sourceType='dialogue')        │
-  │ └── extractAndSaveFacts (LLM call, background)             │
-  │     (no self-check; no emotional-anchor record)            │
+  │ ├── remember (vector memory)                               │
+  │ └── extractAndSaveFacts (fire-and-forget)                  │
   │                                                            │
-  │ Client reads stream:                                       │
-  │ ├── X-Message-Id → remap optimistic user id                │
-  │ ├── X-Emotion-B64 header → setEmotion in store             │
-  │ ├── text chunks → updateLastMessage (accumulated)          │
-  │ └── done → finalizeLastMessage                             │
+  │ Client reads stream → updateLastMessage / finalize         │
   └────────────────────────────────────────────────────────────┘
 ```
+
+> Agentic parts protocol + UI contract: [`AGENTIC-CHAT.md`](./AGENTIC-CHAT.md). Model slots: [`AGENT-MODEL.md`](./AGENT-MODEL.md).
 
 ## Cognitive depth pipeline
 
@@ -119,14 +117,11 @@ User message + mode (auto | agent)
   │   └── trivial | simple | moderate | complex | research (heuristic)
   │
   └─ cognitive-depth.ts: planExecution(mode, tier, complexity)
-      └── ExecutionPlan { calls, deliberate, selfCheck:false, maxTokens,
+      └── ExecutionPlan { calls, deliberate:false, selfCheck:false, maxTokens,
                           toolsEnabled, autoWebSearch }
 
-  EXECUTION_MATRIX (auto mode) — single source of truth for depth:
-  ├── micro:    always single-call
-  ├── standard: deliberate on complex/research only
-  ├── plus/max: deliberate on moderate+
-  └── selfCheck: always false in streaming (cannot revise delivered answer)
+  Latency pass (current): deliberate + monologue LLM pre-calls are always off.
+  Depth still gates tools / maxTokens / autoWebSearch by tier × complexity.
 
   Agent mode: ReAct in runner.ts (tools, maxSteps from agent tier)
 ```
@@ -135,12 +130,13 @@ User message + mode (auto | agent)
 
 ### Workspace, KB, and tool lock (gotchas)
 
-- **Agent workspace.** `resolveWorkspace` (`workspace-binding.ts`): explicit `fsScope` → **episode binding** (`EpisodeFact` `lia.workspace`) → `LIA_AGENT_DEFAULT_WORKSPACE` → ready KB folder/codebase whose **name** appears in the goal → Lia `PATHS.root` only if the goal mentions Lia (or `LIA_AGENT_MOUNT_SELF=true`) → coding sandbox → none. UI: chat header `WorkspaceBadge`. KB pin (`sourceIds`) hard-filters proactive search + `search_sources` (override: `searchEverywhere=true`). See `docs/drafts/workspace.md`.
-- **Workspace modes (Phase 4).** `read` / `explore` / `edit` (`workspace-modes.ts`): tool whitelist + no write-sandbox for Read/Explore; Edit without project/KB → HTTP 409 `sandbox_confirm_required` until confirm. UI: `AgentWorkspaceModeSelector` next to Диалог/Агент.
-- **Workspace memory (Phase 5).** Durable `GlobalFact` keys `workspace.<fingerprint>.*` — same project/KB pin across episodes injects remembered label/path/overview into chat + agent prompts. UI: Workspace → «Что Лия помнит…».
-- **Workspace UX (Phase 6).** Citations `[text](#source:id[:chunkId])` open modal + scroll to chunk; empty-state copy; pinned KB index status on badge; click file change → preview in workspace tree.
+- **Agent workspace.** `resolveWorkspace` (`workspace-binding.ts`): explicit `fsScope` → **episode binding** (`EpisodeFact` `lia.workspace`) → `LIA_AGENT_DEFAULT_WORKSPACE` → ready KB folder/codebase whose **name** appears in the goal → Lia `PATHS.root` only if the goal mentions Lia (or `LIA_AGENT_MOUNT_SELF=true`) → coding sandbox → none. UI: chat header `WorkspaceBadge`. KB pin (`sourceIds`) hard-filters proactive search + `search_sources` (override: `searchEverywhere=true`). Background notes: `docs/drafts/workspace.md`.
+- **Workspace modes.** `read` / `explore` / `edit` (`workspace-modes.ts`): tool whitelist + no write-sandbox for Read/Explore; Edit without project/KB → HTTP 409 `sandbox_confirm_required` until confirm. UI: `AgentWorkspaceModeSelector` + apply Ask\|Auto.
+- **Workspace memory.** Durable `GlobalFact` keys `workspace.<fingerprint>.*` — same project/KB pin across episodes. UI: Workspace → «Что Лия помнит…».
+- **Mentions / rules.** `@file` / `@folder` in goals; probe `GET /api/episodes/:id/workspace/probe`; rules from `AGENTS.md` etc.
+- **Apply / rollback.** `file-apply`, `file-undo`, `rollback` under `/api/agent/[id]/…` — see [`AGENTIC-CHAT.md`](./AGENTIC-CHAT.md).
 - **Code exploration seed.** `docs/ARCHITECTURE.md` + key paths only when `fsScope` is Lia root.
-- **KB-only whitelist** applies only to **pure lookup** goals (`isKbLookupGoal`: «найди/опиши … в базе знаний»). Mentions like «проект в базе знаний» + code exploration do **not** strip `search_codebase`.
+- **KB-only whitelist** applies only to **pure lookup** goals (`isKbLookupGoal`). Mentions like «проект в базе знаний» + code exploration do **not** strip `search_codebase`.
 - **folder vs codebase:** folder indexer indexes documents; use a separate **codebase** source for semantic `search_codebase`. Prefer `grep` for exact symbols when a real `fsScope` is mounted.
 - **ГОТОВО:** only a line-start `ГОТОВО:` / `DONE:` ends the loop; ignored after empty tree / path errors. Early KB finalize needs deep read or ≥2 successful KB steps.
 
@@ -211,8 +207,9 @@ Template подставляет defaults для `toolsWhitelist`, `maxSteps`, `m
 ## RL feedback loop — removed (2026-07)
 
 Python sidecar, `src/lib/rl/`, `/api/rl/*`, Learning tab и RL tables
-(`RLExperience`, `RlModelVersion`) удалены. Тон ответа = inner monologue
-(`liaDecision`). Self-check остаётся (tier-gated) и только логирует severity.
+(`RLExperience`, `RlModelVersion`) удалены. Тон ответа = `createFallbackDecision`
+(без monologue LLM). Self-check в streaming выключен (нельзя переписать
+уже отданный ответ).
 
 Orphan SQLite tables may remain until an optional `db:push`; Prisma client
 no longer references them.
@@ -274,13 +271,16 @@ Zustand store (4 slices + devtools + persist):
   episodesSlice    episodes[], currentEpisodeId
                    setEpisodes, addEpisode, removeEpisode, setCurrentEpisode
                    
-  messagesSlice    messages[], emotion, isStreaming, mode
+  messagesSlice    messages[], emotion, isStreaming, mode,
+                   agentWorkspaceMode, agentApplyMode,
+                   applyAgentPartEvent, patchAgentTurnParts
                    setMessages, addMessage, updateLastMessage, finalizeLastMessage
                    setEmotion, setStreaming, setMode
                    
   agentSlice       agentTasks[], activeTaskId, activeTaskStatus,
                    activeTaskPlan, activeTaskSteps, activeTaskQuestion,
-                   activeTaskResult, activeTaskError, activeTaskArtifacts
+                   activeTaskResult, activeTaskError, activeTaskArtifacts,
+                   activeTaskFileChanges
                    setActiveTask, addActiveTaskStep, resetActiveTask, ...
                    
   healthSlice      ollamaOk, ollamaError
@@ -288,7 +288,7 @@ Zustand store (4 slices + devtools + persist):
 
   Middleware:
   ├── devtools    — Redux DevTools integration
-  └── persist     — mode saved to localStorage (user preference survives reload)
+  └── persist     — mode (+ apply mode) in localStorage
 ```
 
 ## Error handling strategy

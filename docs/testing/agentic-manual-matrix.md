@@ -17,7 +17,7 @@ Qualitative checklist vs Cursor-like expectations. Fill after manual runs on ≥
 5. `@file` large: signatures / truncate note; model can `read_file`.
 6. Shell: `bun test` ok; `… && rm` / `npm run x -- --evil` blocked.
 7. Rollback: restores pre-agent git tip or file undo stack.
-8. Agent model = tools-capable (not Reasoning Distilled).
+8. Agent model = tools-capable (not Reasoning Distilled). See [`docs/AGENT-MODEL.md`](../AGENT-MODEL.md).
 
 ## Results log
 
