@@ -40,6 +40,8 @@ export type AgentSlice = {
   activeTaskDesign: ProjectDesignLive | null;
   activeTaskRuntimeLogs: RuntimeLogLive[];
   activeTaskRuntime: RuntimeStatusLive | null;
+  /** Coding backend for the active turn. */
+  activeTaskExecutor: 'claude_code' | 'react' | null;
 
   setAgentTasks: (t: AgentTask[]) => void;
   addAgentTask: (t: AgentTask) => void;
@@ -70,6 +72,7 @@ export type AgentSlice = {
   addActiveTaskRuntimeLog: (line: RuntimeLogLive) => void;
   setActiveTaskRuntime: (r: RuntimeStatusLive | null) => void;
   clearActiveTaskRuntimeLogs: () => void;
+  setActiveTaskExecutor: (e: 'claude_code' | 'react' | null) => void;
 
   resetActiveTask: () => void;
 };
@@ -80,6 +83,7 @@ const INITIAL_ACTIVE_TASK: Pick<AgentSlice,
   | 'activeTaskError' | 'activeTaskArtifacts'
   | 'activeTaskFileChanges'
   | 'activeTaskDesign' | 'activeTaskRuntimeLogs' | 'activeTaskRuntime'
+  | 'activeTaskExecutor'
 > = {
   activeTaskId: null,
   activeTaskStatus: null,
@@ -93,6 +97,7 @@ const INITIAL_ACTIVE_TASK: Pick<AgentSlice,
   activeTaskDesign: null,
   activeTaskRuntimeLogs: [],
   activeTaskRuntime: null,
+  activeTaskExecutor: null,
 };
 
 export const createAgentSlice: StateCreator<
@@ -159,6 +164,7 @@ export const createAgentSlice: StateCreator<
   })),
   setActiveTaskRuntime: (r) => set({ activeTaskRuntime: r }),
   clearActiveTaskRuntimeLogs: () => set({ activeTaskRuntimeLogs: [] }),
+  setActiveTaskExecutor: (e) => set({ activeTaskExecutor: e }),
 
   resetActiveTask: () => set({ ...INITIAL_ACTIVE_TASK }),
 });

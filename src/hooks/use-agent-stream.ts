@@ -263,6 +263,9 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
     task_started: (e) => {
       const data = parseEventData(e);
       dispatchParts(ctx, 'task_started', data ?? { goal: '', ts: Date.now() });
+      if (data?.executor === 'claude_code' || data?.executor === 'react') {
+        useChatStore.getState().setActiveTaskExecutor(data.executor);
+      }
     },
     task_planning: (e) => {
       dispatchParts(ctx, 'task_planning', parseEventData(e));
@@ -274,6 +277,9 @@ function createSseHandlers(ctx: StreamCtx): Record<string, (e: Event) => void> {
       if (!data?.plan) return;
       useChatStore.getState().setActiveTaskPlan(data.plan as AgentPlanLive);
       useChatStore.getState().setActiveTaskStatus('executing');
+      if (data.executor === 'claude_code' || data.executor === 'react') {
+        useChatStore.getState().setActiveTaskExecutor(data.executor);
+      }
     },
     step_start: (e) => {
       const data = parseEventData(e);

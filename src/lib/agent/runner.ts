@@ -124,7 +124,7 @@ export async function sweepStaleTasks(): Promise<number> {
   try {
     const staleTasks = await db.agentTask.findMany({
       where: { status: { in: [...AGENT_TRANSIENT_STATUSES] } },
-      select: { id: true, status: true, checkpointJson: true, episodeId: true },
+      select: { id: true, status: true, checkpointJson: true, planJson: true, episodeId: true },
     });
 
     // Never sweep tasks that still have a live in-memory runner (HMR / lazy
@@ -132,10 +132,33 @@ export async function sweepStaleTasks(): Promise<number> {
     const candidates = staleTasks.filter(t => !activeRunners.has(t.id));
     if (candidates.length === 0) return 0;
 
+    // Claude Code: no resume — kill orphan processes and fail (never pending resume).
+    try {
+      const { killStoredClaudeCode } = await import('./claude-code');
+      for (const t of candidates) {
+        killStoredClaudeCode(t.id);
+      }
+    } catch { /* optional module */ }
+
     // Phase 4.1: для задач с checkpoint — сбрасываем в pending для resume.
     // Задачи без checkpoint (planning, synthesizing, waiting_input без прогресса) — failed.
+    // CC tasks (plan goal starts with Claude Code) never resume.
+    const isCcTask = (t: { checkpointJson: string | null; planJson: string | null }) => {
+      for (const raw of [t.planJson, t.checkpointJson]) {
+        if (!raw) continue;
+        try {
+          const p = JSON.parse(raw) as { goal?: string; plan?: { goal?: string } };
+          const g = p.goal ?? p.plan?.goal;
+          if (typeof g === 'string' && g.startsWith('Claude Code')) return true;
+        } catch { /* ignore */ }
+      }
+      return false;
+    };
+
     const resumable = candidates.filter(t =>
-      t.checkpointJson && (t.status === 'executing' || t.status === 'waiting_input'),
+      t.checkpointJson
+      && (t.status === 'executing' || t.status === 'waiting_input')
+      && !isCcTask(t),
     );
     const failed = candidates.filter(t => !resumable.some(r => r.id === t.id));
 
@@ -313,6 +336,32 @@ export async function runAgentTask(taskId: string): Promise<void> {
       provider: preflightResult.provider,
       ollamaModels: preflightResult.ollama.models.length,
     });
+
+    // ── Claude Code backend (project coding) — one goal → one executor ──
+    {
+      const {
+        getClaudeCodeSettings,
+        shouldUseClaudeCodeExecutor,
+        runClaudeCodeTask,
+      } = await import('./claude-code');
+      const ccSettings = await getClaudeCodeSettings();
+      const decision = shouldUseClaudeCodeExecutor({
+        goal: task.goal,
+        fsScope: task.fsScope,
+        claudeCodeEnabled: ccSettings.enabled,
+      });
+      if (decision.use) {
+        log.info('agent', 'Routing to Claude Code executor', { reason: decision.reason });
+        await runClaudeCodeTask(taskId, {
+          abortSignal: taskAbortCtrl.signal,
+          registerAbort: (kill) => {
+            taskAbortCtrl.signal.addEventListener('abort', kill, { once: true });
+          },
+        });
+        return;
+      }
+      log.debug('agent', 'Claude Code not used', { reason: decision.reason });
+    }
 
     await updateAgentTask(taskId, {
       status: 'planning',
@@ -969,6 +1018,11 @@ export async function cancelAgentTaskRun(taskId: string): Promise<void> {
   signalCancellation(taskId);
   cancelWaiting(taskId);
   abortTask(taskId);
+
+  try {
+    const { killStoredClaudeCode } = await import('./claude-code');
+    killStoredClaudeCode(taskId);
+  } catch { /* optional */ }
 
   try {
     const { stopRuntime } = await import('@/lib/agent/runtime/process-supervisor');

@@ -12,6 +12,7 @@ import { Check, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { isOllamaLoopbackUrl, normalizeOllamaBaseUrl } from '@/lib/ollama-base-url';
+import { isCloudModelTag } from '@/lib/ollama-cloud-tags';
 import type { Settings } from './types';
 import { describeEmbedModel } from './describe-embed-model';
 import { LIA_APP_EVENTS, dispatchLiaAppEvent } from '@/lib/lia-app-events';
@@ -19,6 +20,11 @@ import { LIA_APP_EVENTS, dispatchLiaAppEvent } from '@/lib/lia-app-events';
 /** Embed / retrieval models must not appear in the chat picker. */
 const EMBED_MODEL_RE = /embed|nomic|minilm|e5-/i;
 const LOCAL_OLLAMA_URL = 'http://127.0.0.1:11434';
+
+/** Local chat/agent only — cloud tags burn ollama.com limits with Lia system prompts. */
+function isLocalChatModel(name: string): boolean {
+  return !EMBED_MODEL_RE.test(name) && !isCloudModelTag(name);
+}
 
 function formatSettingsError(data: { error?: string; details?: Array<{ path?: string; message?: string }> }, status: number): string {
   if (data.error === 'validation failed' && Array.isArray(data.details) && data.details.length > 0) {
@@ -55,17 +61,37 @@ export function ModelTab({
   onSaved,
 }: ModelTabProps) {
   const [saving, setSaving] = useState(false);
+  const [claudeCodeEnabled, setClaudeCodeEnabled] = useState(!!settings.claudeCodeEnabled);
+  const [claudeCodeModel, setClaudeCodeModel] = useState(settings.claudeCodeModel ?? '');
+  const [ollamaApiKeyDraft, setOllamaApiKeyDraft] = useState('');
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(!!settings.ollamaApiKeyConfigured);
 
-  const chatModels = settings.availableModels.filter((m) => !EMBED_MODEL_RE.test(m));
+  useEffect(() => {
+    setClaudeCodeEnabled(!!settings.claudeCodeEnabled);
+    setClaudeCodeModel(settings.claudeCodeModel ?? '');
+  }, [settings.claudeCodeEnabled, settings.claudeCodeModel]);
+
+  useEffect(() => {
+    setApiKeyConfigured(!!settings.ollamaApiKeyConfigured);
+  }, [settings.ollamaApiKeyConfigured]);
+
+  /** Pulled local tags only — never :cloud in companion pickers. */
+  const chatModels = settings.availableModels.filter(isLocalChatModel);
+  /** Cloud catalog — only when Claude Code is on (isolated prompts, no Lia system). */
+  const cloudModels = claudeCodeEnabled
+    ? (settings.availableCloudModels ?? []).filter((m) => !EMBED_MODEL_RE.test(m))
+    : [];
   const effectiveBase = normalizeOllamaBaseUrl(baseUrl) ?? baseUrl;
   const isRemote = Boolean(effectiveBase) && !isOllamaLoopbackUrl(effectiveBase);
-
   const persist = async (overrides: {
     model?: string;
     agentModel?: string;
     embedModel?: string;
     baseUrl?: string;
-  } = {}, opts?: { quietSuccess?: boolean; connectionCheck?: boolean }) => {
+    claudeCodeEnabled?: boolean;
+    claudeCodeModel?: string;
+    ollamaApiKey?: string;
+  } = {}, opts?: { quietSuccess?: boolean; connectionCheck?: boolean; silent?: boolean }) => {
     setSaving(true);
     try {
       const nextModel = overrides.model ?? model;
@@ -75,21 +101,39 @@ export function ModelTab({
       const normalizedBase = rawBase.trim()
         ? (normalizeOllamaBaseUrl(rawBase) ?? rawBase.trim())
         : '';
+      const nextCcEnabled = overrides.claudeCodeEnabled ?? claudeCodeEnabled;
+      const nextCcModel = overrides.claudeCodeModel ?? claudeCodeModel;
 
       if (rawBase.trim() && !normalizeOllamaBaseUrl(rawBase)) {
         throw new Error('Некорректный хост Ollama. Пример: 192.168.1.50 или http://192.168.1.50:11434');
+      }
+
+      // Cloud only via Claude Code model override — never companion chat / ReAct agent.
+      if (isCloudModelTag(nextModel)) {
+        throw new Error('Cloud-модели нельзя ставить на чат — включи Claude Code и выбери cloud в «Модель CC».');
+      }
+      if (isCloudModelTag(nextAgent)) {
+        throw new Error('Cloud-модели нельзя ставить на слот агента — только в «Модель CC» при включённом Claude Code.');
+      }
+      if (isCloudModelTag(nextCcModel) && !nextCcEnabled) {
+        throw new Error('Cloud-модель для CC доступна только при включённом Claude Code.');
       }
 
       if (normalizedBase && normalizedBase !== baseUrl) {
         setBaseUrl(normalizedBase);
       }
 
-      const body = {
+      const body: Record<string, unknown> = {
         baseUrl: normalizedBase || undefined,
         model: nextModel,
         agentModel: nextAgent,
         embedModel: nextEmbed === 'auto' ? '' : nextEmbed,
+        claudeCodeEnabled: nextCcEnabled,
+        claudeCodeModel: nextCcModel,
       };
+      if (overrides.ollamaApiKey !== undefined) {
+        body.ollamaApiKey = overrides.ollamaApiKey;
+      }
 
       const res = await fetch('/api/settings', {
         method: 'POST',
@@ -103,27 +147,36 @@ export function ModelTab({
         ollamaError?: string;
         model?: string;
         baseUrl?: string;
+        ollamaApiKeyConfigured?: boolean;
       };
       if (!res.ok) {
         throw new Error(formatSettingsError(data, res.status));
       }
 
       if (data.baseUrl) setBaseUrl(data.baseUrl);
+      if (typeof data.ollamaApiKeyConfigured === 'boolean') {
+        setApiKeyConfigured(data.ollamaApiKeyConfigured);
+      }
+      if (overrides.ollamaApiKey !== undefined) {
+        setOllamaApiKeyDraft('');
+      }
 
-      if (opts?.connectionCheck) {
-        if (data.ollamaOk) {
-          toast.success(`Ollama на связи · ${data.baseUrl || normalizedBase}`);
+      if (!opts?.silent) {
+        if (opts?.connectionCheck) {
+          if (data.ollamaOk) {
+            toast.success(`Ollama на связи · ${data.baseUrl || normalizedBase}`);
+          } else {
+            toast.warning(`Нет ответа от Ollama: ${data.ollamaError ?? 'unknown'}`);
+          }
+        } else if (!opts?.quietSuccess) {
+          if (data.ollamaOk) {
+            toast.success(`Сохранено · чат: ${data.model || nextModel}`);
+          } else {
+            toast.warning(`Модель записана, но Ollama не отвечает: ${data.ollamaError ?? 'unknown'}`);
+          }
         } else {
-          toast.warning(`Нет ответа от Ollama: ${data.ollamaError ?? 'unknown'}`);
+          toast.success(`Модель: ${data.model || nextModel}`);
         }
-      } else if (!opts?.quietSuccess) {
-        if (data.ollamaOk) {
-          toast.success(`Сохранено · чат: ${data.model || nextModel}`);
-        } else {
-          toast.warning(`Модель записана, но Ollama не отвечает: ${data.ollamaError ?? 'unknown'}`);
-        }
-      } else {
-        toast.success(`Модель: ${data.model || nextModel}`);
       }
       await onSaved();
       dispatchLiaAppEvent(LIA_APP_EVENTS.settingsChanged);
@@ -170,6 +223,45 @@ export function ModelTab({
       /* toast already shown */
     }
   };
+
+  const pickCcModel = async (name: string) => {
+    setClaudeCodeModel(name);
+    try {
+      await persist({ claudeCodeModel: name }, { quietSuccess: true });
+    } catch {
+      /* toast already shown */
+    }
+  };
+
+  const renderModelGrid = (
+    models: string[],
+    selected: string,
+    onPick: (name: string) => void,
+    keyPrefix: string,
+  ) => (
+    <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
+      {models.map((m) => (
+        <button
+          type="button"
+          key={`${keyPrefix}-${m}`}
+          disabled={saving}
+          onClick={() => onPick(m)}
+          className={cn(
+            'text-left text-xs px-2 py-1.5 rounded border transition-colors',
+            selected === m
+              ? 'border-accent bg-accent/10 text-accent'
+              : 'border-border hover:border-accent/50',
+            saving && 'opacity-60',
+          )}
+        >
+          <div className="flex items-center justify-between gap-1">
+            <span className="truncate font-mono">{m}</span>
+            {selected === m && <Check className="w-3 h-3 shrink-0" />}
+          </div>
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -260,31 +352,10 @@ export function ModelTab({
         <p className="text-[10px] text-text-dim">Клик по модели сразу сохраняет выбор</p>
         {chatModels.length === 0 ? (
           <p className="text-xs text-text-dim">
-            Нет доступных моделей. В Ollama скачай, например, qwen3:8b
+            Нет локальных моделей. В Ollama скачай, например, qwen3:8b
           </p>
         ) : (
-          <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
-            {chatModels.map(m => (
-              <button
-                type="button"
-                key={m}
-                disabled={saving}
-                onClick={() => void pickChatModel(m)}
-                className={cn(
-                  'text-left text-xs px-2 py-1.5 rounded border transition-colors',
-                  model === m
-                    ? 'border-accent bg-accent/10 text-accent'
-                    : 'border-border hover:border-accent/50',
-                  saving && 'opacity-60',
-                )}
-              >
-                <div className="flex items-center justify-between gap-1">
-                  <span className="truncate">{m}</span>
-                  {model === m && <Check className="w-3 h-3 shrink-0" />}
-                </div>
-              </button>
-            ))}
-          </div>
+          renderModelGrid(chatModels, model, (name) => { void pickChatModel(name); }, 'chat')
         )}
         <Input
           value={model}
@@ -293,7 +364,8 @@ export function ModelTab({
           className="text-sm mt-1"
         />
         <p className="text-[10px] text-text-dim">
-          Ручной ввод — нажми «Сохранить» ниже
+          Только локальные модели. Cloud — в Claude Code (иначе системные промпты сожрут лимиты).
+          Ручной ввод — «Сохранить» ниже.
         </p>
       </div>
 
@@ -312,11 +384,15 @@ export function ModelTab({
         <Label className="text-xs">
           Модель для агента
           <span className="text-text-dim font-normal ml-1.5">
-            — длинные задачи с tools (не Reasoning Distilled)
+            {claudeCodeEnabled
+              ? '— модель для Claude Code (через Ollama Anthropic API)'
+              : '— длинные задачи с tools (не Reasoning Distilled)'}
           </span>
         </Label>
         <p className="text-[10px] text-text-dim leading-snug -mt-0.5 mb-1">
-          Для Агента нужна модель с tools; Reasoning Distilled — для обычного диалога.
+          {claudeCodeEnabled
+            ? 'При включённом Claude Code слот агента (или override ниже) передаётся как --model.'
+            : 'Для Агента нужна модель с tools; Reasoning Distilled — для обычного диалога.'}
         </p>
         <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
           <button
@@ -362,6 +438,151 @@ export function ModelTab({
           placeholder="пусто = как у чата, напр. qwen3:8b"
           className="text-sm font-mono mt-1"
         />
+      </div>
+
+      {/* Claude Code coding backend */}
+      <div className="space-y-2 rounded-md border border-border/60 p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <Label className="text-xs">Coding: Claude Code</Label>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={claudeCodeEnabled}
+            disabled={saving}
+            onClick={() => {
+              const next = !claudeCodeEnabled;
+              setClaudeCodeEnabled(next);
+              const overrides: {
+                claudeCodeEnabled: boolean;
+                model?: string;
+                agentModel?: string;
+                claudeCodeModel?: string;
+              } = { claudeCodeEnabled: next };
+              // CC off → strip cloud so companion prompts cannot hit ollama.com.
+              if (!next) {
+                if (isCloudModelTag(model)) {
+                  const fallback = chatModels[0] ?? '';
+                  setModel(fallback);
+                  overrides.model = fallback;
+                }
+                if (isCloudModelTag(agentModel)) {
+                  setAgentModel('');
+                  overrides.agentModel = '';
+                }
+                if (isCloudModelTag(claudeCodeModel)) {
+                  setClaudeCodeModel('');
+                  overrides.claudeCodeModel = '';
+                }
+              }
+              void persist(overrides, { quietSuccess: true }).catch(() => {
+                setClaudeCodeEnabled(!next);
+              });
+            }}
+            className={cn(
+              'relative h-5 w-9 rounded-full transition-colors shrink-0',
+              claudeCodeEnabled ? 'bg-accent' : 'bg-border',
+            )}
+          >
+            <span
+              className={cn(
+                'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform',
+                claudeCodeEnabled && 'translate-x-4',
+              )}
+            />
+          </button>
+        </div>
+        <p className="text-[10px] text-text-dim leading-snug">
+          Project coding через Claude Code CLI + Ollama Anthropic Messages API.
+          Cloud только здесь (без системных промптов Лии). Рекомендуется ctx ≥64k.
+          Create Runtime / KB остаются у Лии.
+        </p>
+        <div className={cn(
+          'text-[10px] flex items-center gap-1.5',
+          settings.claudeBinaryOk ? 'text-success' : 'text-warning',
+        )}>
+          {settings.claudeBinaryOk
+            ? 'Claude Code CLI найден в PATH'
+            : (settings.claudeBinaryError || 'Claude Code CLI не найден — установи и перезапусти сервер')}
+        </div>
+        {claudeCodeEnabled && (
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <Label className="text-[10px] text-text-dim">Модель CC (пусто = слот агента)</Label>
+              {cloudModels.length > 0 && (
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-text-dim">Cloud (ollama.com)</Label>
+                  <p className="text-[10px] text-text-dim leading-snug">
+                    Только для Claude Code — клик сохраняет. Не для чата / ReAct.
+                  </p>
+                  {renderModelGrid(
+                    cloudModels,
+                    claudeCodeModel,
+                    (name) => { void pickCcModel(name); },
+                    'cc-cloud',
+                  )}
+                </div>
+              )}
+              {chatModels.length > 0 && (
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-text-dim">Локальные (override)</Label>
+                  {renderModelGrid(
+                    chatModels,
+                    claudeCodeModel,
+                    (name) => { void pickCcModel(name); },
+                    'cc-local',
+                  )}
+                </div>
+              )}
+              <Input
+                value={claudeCodeModel}
+                onChange={(e) => setClaudeCodeModel(e.target.value)}
+                placeholder={settings.agentModelEffective || model || 'glm-4.7:cloud'}
+                className="text-sm font-mono h-8"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="ollamaApiKey" className="text-[10px] text-text-dim">
+                Ollama API key (cloud напрямую)
+              </Label>
+              <p className="text-[10px] text-text-dim leading-snug">
+                Если задан и модель <span className="font-mono">*:cloud</span>, Claude Code
+                ходит на <span className="font-mono">https://ollama.com</span>.
+                Иначе — через хост Ollama (<span className="font-mono">ollama signin</span>).
+                Ключ: ollama.com/settings/keys
+                {apiKeyConfigured ? ' · сейчас сохранён' : ''}.
+              </p>
+              <div className="flex gap-1.5">
+                <Input
+                  id="ollamaApiKey"
+                  type="password"
+                  value={ollamaApiKeyDraft}
+                  onChange={(e) => setOllamaApiKeyDraft(e.target.value)}
+                  placeholder={apiKeyConfigured ? '•••••••• (новый ключ или очистить)' : 'не задан'}
+                  className="text-sm font-mono h-8"
+                  autoComplete="off"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 shrink-0 text-[11px]"
+                  disabled={saving || (!ollamaApiKeyDraft.trim() && !apiKeyConfigured)}
+                  onClick={() => {
+                    const nextKey = ollamaApiKeyDraft.trim();
+                    void persist(
+                      { ollamaApiKey: nextKey },
+                      { silent: true },
+                    ).then(() => {
+                      toast.success(nextKey ? 'API key сохранён' : 'API key очищен');
+                    }).catch(() => { /* toast already shown */ });
+                  }}
+                >
+                  {ollamaApiKeyDraft.trim() ? 'Сохранить key' : 'Очистить'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Embed model */}

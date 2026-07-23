@@ -12,9 +12,18 @@ export type Settings = {
   /** Effective model the agent will use. */
   agentModelEffective?: string;
   embedModel: string;
+  /** Claude Code coding backend (Ollama Anthropic API). */
+  claudeCodeEnabled?: boolean;
+  claudeCodeModel?: string;
+  claudeBinaryOk?: boolean;
+  claudeBinaryError?: string;
   ollamaOk: boolean;
   ollamaError?: string;
   availableModels: string[];
+  /** Cloud tags from ollama.com catalog (+ local :cloud). */
+  availableCloudModels?: string[];
+  /** True if DB or env has OLLAMA_API_KEY (value never returned). */
+  ollamaApiKeyConfigured?: boolean;
   availableEmbedModels: string[];
   vrmFiles: string[];
   activeVrm: string | null;

@@ -9,6 +9,9 @@
 
 export type ToolCallStatus = 'pending' | 'running' | 'done' | 'error';
 
+/** Which coding backend owns this agent turn. */
+export type AgentExecutorKind = 'claude_code' | 'react';
+
 export type MessagePart =
   | {
       id: string;
@@ -20,6 +23,7 @@ export type MessagePart =
       type: 'status';
       status: 'planning' | 'executing' | 'waiting_input' | 'synthesizing' | 'done' | 'failed' | 'cancelled';
       detail?: string;
+      executor?: AgentExecutorKind;
     }
   | {
       id: string;
@@ -27,6 +31,7 @@ export type MessagePart =
       goal: string;
       steps: string[];
       complexity: string;
+      executor?: AgentExecutorKind;
     }
   | {
       id: string;
@@ -90,12 +95,13 @@ export type MessagePart =
 
 /** Client-facing events that mutate parts (subset + extensions of server AgentEvent). */
 export type AgentPartEvent =
-  | { type: 'task_started'; taskId: string; goal: string; ts: number; eventId?: string }
+  | { type: 'task_started'; taskId: string; goal: string; executor?: AgentExecutorKind; ts: number; eventId?: string }
   | { type: 'task_planning'; taskId: string; ts: number; eventId?: string }
   | {
       type: 'task_plan_ready';
       taskId: string;
       plan: { goal: string; steps: string[]; complexity: string };
+      executor?: AgentExecutorKind;
       ts: number;
       eventId?: string;
     }
@@ -269,9 +275,21 @@ function ensureTextPart(parts: MessagePart[]): { parts: MessagePart[]; textId: s
   return { parts: [...parts, { id: textId, type: 'text', text: '' }], textId };
 }
 
-function upsertStatus(parts: MessagePart[], status: Extract<MessagePart, { type: 'status' }>['status'], detail?: string): MessagePart[] {
+function upsertStatus(
+  parts: MessagePart[],
+  status: Extract<MessagePart, { type: 'status' }>['status'],
+  detail?: string,
+  executor?: AgentExecutorKind,
+): MessagePart[] {
   const idx = parts.findIndex(p => p.type === 'status');
-  const part: MessagePart = { id: 'status', type: 'status', status, detail };
+  const prev = idx >= 0 && parts[idx].type === 'status' ? parts[idx] : null;
+  const part: MessagePart = {
+    id: 'status',
+    type: 'status',
+    status,
+    detail,
+    executor: executor ?? (prev && prev.type === 'status' ? prev.executor : undefined),
+  };
   if (idx >= 0) {
     const next = parts.slice();
     next[idx] = part;
@@ -302,7 +320,12 @@ export function reduceAgentParts(
 
   switch (event.type) {
     case 'task_started':
-      parts = upsertStatus(parts, 'executing', event.goal.slice(0, 120));
+      parts = upsertStatus(
+        parts,
+        'executing',
+        event.goal.slice(0, 120),
+        event.executor,
+      );
       break;
 
     case 'task_planning':
@@ -310,7 +333,7 @@ export function reduceAgentParts(
       break;
 
     case 'task_plan_ready':
-      parts = upsertStatus(parts, 'executing');
+      parts = upsertStatus(parts, 'executing', undefined, event.executor);
       parts = [
         ...parts.filter(p => p.type !== 'plan'),
         {
@@ -319,6 +342,7 @@ export function reduceAgentParts(
           goal: event.plan.goal,
           steps: event.plan.steps,
           complexity: event.plan.complexity,
+          executor: event.executor,
         },
       ];
       break;

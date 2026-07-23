@@ -35,7 +35,7 @@ Windows: `bun install`, Ollama из Start Menu, те же `ollama pull` в Power
 | Слот | На что смотреть |
 |---|---|
 | **Чат** | Характер и качество диалога. Tools желательны, если в чате нужен поиск/KB. |
-| **Агент** | Обязательно поддержка **tools** (Ollama `capabilities: tools`). Без tools агент деградирует в «только текст». |
+| **Агент** | Обязательно поддержка **tools** (Ollama `capabilities: tools`). Без tools агент деградирует в «только текст». Опционально: **Coding: Claude Code** в настройках — project coding через CLI + Ollama Anthropic API (см. [`docs/AGENT-MODEL.md`](./docs/AGENT-MODEL.md)). |
 | **Память** | Отдельная embed-модель (`nomic-embed-text`, `bge-m3`, …). Не ставь chat-модель сюда. |
 
 Ориентир по размеру (Q4, одна основная модель в VRAM):
@@ -286,6 +286,7 @@ ORDER BY v.distance LIMIT ?
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Архитектура, chat/agent flow, memory |
 | [docs/AGENTIC-CHAT.md](./docs/AGENTIC-CHAT.md) | Agentic parts + UI contract |
 | [docs/AGENT-MODEL.md](./docs/AGENT-MODEL.md) | Chat vs agent model guidance |
+| [docs/CLAUDE-CODE.md](./docs/CLAUDE-CODE.md) | Claude Code + Ollama: установка и проверка на ПК |
 | [docs/kb/](./docs/kb/README.md) | Knowledge Base |
 | [docs/testing/](./docs/testing/README.md) | Стратегия тестов |
 | [tests/core/README.md](./tests/core/README.md) | Core contract tests |

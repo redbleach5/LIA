@@ -2,6 +2,10 @@
 
 > Набросок 2026-07-22. **Не реализовано** — только черновик; не путать с roadmap чистки v2.
 > Связано: `docs/ARCHITECTURE.md` · `src/lib/llm/resolve-agent-model.ts` · `src/lib/agent/runner*.ts`
+>
+> **2026-07-23:** для **project coding** путь superseded опциональным **Claude Code** backend
+> (`src/lib/agent/claude-code/`, Settings → Coding: Claude Code). Лёгкий executor-слот
+> для coding не развивать параллельно — один executor на цель.
 
 ---
 

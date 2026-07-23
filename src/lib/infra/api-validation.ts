@@ -170,6 +170,15 @@ export const updateSettingsSchema = z.object({
   /** Empty string = agent uses the same model as chat. */
   agentModel: z.string().optional(),
   embedModel: z.string().optional(),
+  /** Coding via Claude Code CLI (Ollama Anthropic API). */
+  claudeCodeEnabled: z.boolean().optional(),
+  /** Optional model override for Claude Code; empty = agent slot. */
+  claudeCodeModel: z.string().optional(),
+  /**
+   * Ollama.com API key for cloud models (Claude Code path B).
+   * Empty string clears the stored key. Omit to leave unchanged.
+   */
+  ollamaApiKey: z.string().max(512).optional(),
   activeVrm: z.string().nullable().optional(),
   avatarConfig: z.record(z.string(), z.unknown()).optional(),
   /** Empty string clears user.name global fact */

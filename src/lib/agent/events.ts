@@ -9,10 +9,19 @@ import { EventEmitter } from 'events';
 
 const globalKey = '__lia_agent_events__';
 
+export type AgentExecutorKind = 'claude_code' | 'react';
+
 export type AgentEvent =
-  | { type: 'task_started'; taskId: string; goal: string; ts: number; eventId?: string }
+  | { type: 'task_started'; taskId: string; goal: string; executor?: AgentExecutorKind; ts: number; eventId?: string }
   | { type: 'task_planning'; taskId: string; ts: number; eventId?: string }
-  | { type: 'task_plan_ready'; taskId: string; plan: { goal: string; steps: string[]; complexity: string }; ts: number; eventId?: string }
+  | {
+      type: 'task_plan_ready';
+      taskId: string;
+      plan: { goal: string; steps: string[]; complexity: string };
+      executor?: AgentExecutorKind;
+      ts: number;
+      eventId?: string;
+    }
   | { type: 'step_start'; taskId: string; step: number; maxSteps: number; thought: string; ts: number; eventId?: string }
   | { type: 'step_end'; taskId: string; step: number; action: string; observation: string; thought: string; durationMs: number; ts: number; eventId?: string }
   | { type: 'tool_start'; taskId: string; step: number; tool: string; input: unknown; ts: number; eventId?: string }

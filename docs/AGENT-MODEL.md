@@ -1,21 +1,56 @@
 # Agent model guidance
 
-Agent ReAct (`runAgentTask`) needs a model with **stable tool calling**.
+Agent ReAct (`runAgentTask`) needs a model with **stable tool calling** — for non-coding paths (KB, web, Create Runtime).
 
-## Recommended
+## Claude Code coding backend (optional)
+
+**Настройка на ПК (чеклист):** [`CLAUDE-CODE.md`](./CLAUDE-CODE.md).
+
+Settings → Model → **Coding: Claude Code** (default off).
+
+When enabled, **project coding** goals with a real `fsScope` (not sandbox) run via **Claude Code CLI** through Ollama’s **Anthropic Messages API** (local and ollama.com cloud). One goal → one executor: no silent fallback to ReAct.
+
+| Path | Executor |
+|------|----------|
+| Edit / fix / explore repo + project fsScope + toggle on | Claude Code only |
+| Create Runtime sandbox | ReAct + runtime |
+| KB / news / chat | chat / ReAct non-FS |
+| Toggle off | Legacy ReAct coding |
+
+**Prompt isolation:** Claude Code receives only the user goal + repo rules (`AGENTS.md` / `.cursorrules`) + `@mentions` — never Lia companion `buildSystemPrompt` or ReAct agent system. Lia voice is a short synthesize **after** CC.
+
+**Ops:** git snapshot before spawn; env scrub (no inherited `ANTHROPIC_API_KEY`); wall-time kill; **after stream `result` → grace (~8s) then SIGTERM** if CLI hangs (common with local thinking models); no CC resume after server restart; Windows `claude` / `claude.cmd`.
+
+Install CLI and ensure it is on `PATH`. Prefer models with **≥64k** context for coding.
+
+## Recommended (ReAct / chat)
 
 - Dedicated **agent** slot in Settings → Model (not the companion chat model).
+- With Claude Code on, the agent slot (or CC model override) is passed as `claude --model`.
 - Prefer instruction-tuned chat models that emit tool calls reliably (e.g. Qwen3 Instruct / similar).
-- Avoid **Reasoning Distilled** / heavy chain-of-thought models for the agent loop — they add latency and often skip or mangle tools.
+- Avoid **Reasoning Distilled** / heavy chain-of-thought models for the ReAct loop — they add latency and often skip or mangle tools.
 
 ## Companion vs agent
 
 | Slot | Role |
 |------|------|
 | Chat / companion | Fast dialogue — tools usually off on trivial/simple turns; monologue/deliberate LLM pre-calls are off (TTFT) |
-| Agent | Multi-step ReAct + tools + workspace |
+| Agent | ReAct for non-coding; or Claude Code `--model` when coding backend is on |
 
 UI tip: Settings → Model → «Агент и память» repeats this split.
+
+## Prompt channels (isolation)
+
+| Channel | System content | Companion `buildSystemPrompt` |
+|---------|----------------|--------------------------------|
+| Chat | Full companion identity, memory, warmth | yes |
+| Agent **plan** | Operational planner JSON rules (`buildPlanSystemPrompt`) | **no** |
+| Agent **execute** | Plan + tools + ГОТОВО (`buildExecuteSystemPrompt`) | **no** |
+| Agent **synthesize** | Light Lia voice for the user-facing answer only | no full companion; short voice ok |
+| Claude Code | User goal + rules/mentions only | **no** |
+| Post–CC summary | Short local synthesize | light voice |
+
+Guards: `assertOperationalAgentPrompt` / `promptLooksLikeCompanionSystem` in `src/lib/agent/phase-prompts.ts`.
 
 ## Optional deep verify
 

@@ -19,22 +19,26 @@ export function AgentStickyBar() {
   const fileChanges = useChatStore(s => s.activeTaskFileChanges);
   const applyMode = useChatStore(s => s.agentApplyMode);
   const setApplyMode = useChatStore(s => s.setAgentApplyMode);
+  const executor = useChatStore(s => s.activeTaskExecutor);
   const markUndoneMany = useChatStore(s => s.markActiveTaskFileChangesUndone);
   const [rollbackBusy, setRollbackBusy] = useState(false);
 
   const busy = isAgentBusyStatus(status);
   if (!activeTaskId || !busy) return null;
 
+  const isClaudeCode = executor === 'claude_code';
   const undoable = fileChanges.filter(c => c.canUndo && !c.undone);
-  const summary = agentWorkbenchSummary({
-    status,
-    busy,
-    stepCount: steps.length,
-    editCount: fileChanges.length,
-    undoableCount: undoable.length,
-    runtimeHealthy: false,
-    designKind: undefined,
-  }) || (plan?.goal ? plan.goal.slice(0, 80) : 'Агент работает…');
+  const summary = isClaudeCode
+    ? (plan?.goal ? plan.goal.slice(0, 80) : 'Claude Code…')
+    : (agentWorkbenchSummary({
+      status,
+      busy,
+      stepCount: steps.length,
+      editCount: fileChanges.length,
+      undoableCount: undoable.length,
+      runtimeHealthy: false,
+      designKind: undefined,
+    }) || (plan?.goal ? plan.goal.slice(0, 80) : 'Агент работает…'));
 
   const toggleApply = () => {
     const next = applyMode === 'ask' ? 'auto' : 'ask';
@@ -67,6 +71,7 @@ export function AgentStickyBar() {
         <span className="text-[11px] text-text-muted truncate flex-1 min-w-0" title={summary}>
           {summary}
         </span>
+        {!isClaudeCode && (
         <button
           type="button"
           onClick={toggleApply}
@@ -81,6 +86,12 @@ export function AgentStickyBar() {
           {applyMode === 'ask' ? <Shield className="w-3 h-3" /> : <Zap className="w-3 h-3" />}
           {applyMode === 'ask' ? 'Ask' : 'Auto'}
         </button>
+        )}
+        {isClaudeCode && (
+          <span className="text-[10px] text-text-muted/80 shrink-0 px-1" title="Запись через Claude Code (auto)">
+            CC
+          </span>
+        )}
         {undoable.length > 0 && (
           <button
             type="button"

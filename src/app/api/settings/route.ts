@@ -46,12 +46,27 @@ export async function GET() {
 
   const userDisplayName = await getUserDisplayName();
 
+  const { getClaudeCodeSettings } = await import('@/lib/agent/claude-code/settings');
+  const { detectClaudeBinary } = await import('@/lib/agent/claude-code/detect');
+  const { listOllamaCloudModels } = await import('@/lib/ollama-cloud-models');
+  const { hasOllamaApiKeyConfigured } = await import('@/lib/ollama-api-key');
+  const cc = await getClaudeCodeSettings();
+  const binary = await detectClaudeBinary();
+  const localModels = health.models ?? [];
+  const availableCloudModels = await listOllamaCloudModels({ localTags: localModels });
+
   return NextResponse.json({
     ...settings,
+    claudeCodeEnabled: cc.enabled,
+    claudeCodeModel: cc.model,
+    claudeBinaryOk: binary.ok,
+    claudeBinaryError: binary.ok ? undefined : binary.error,
+    ollamaApiKeyConfigured: await hasOllamaApiKeyConfigured(),
     ollamaOk: health.ok,
     ollamaError: health.error,
-    availableModels: health.models ?? [],
-    availableEmbedModels: (health.models ?? []).filter(m =>
+    availableModels: localModels,
+    availableCloudModels,
+    availableEmbedModels: localModels.filter(m =>
       m.startsWith('nomic-embed') ||
       m.startsWith('mxbai-embed') ||
       m.startsWith('bge-m3') ||
@@ -111,6 +126,19 @@ export async function POST(req: NextRequest) {
       await setUserDisplayName(body.userDisplayName ?? '');
     }
 
+    if (body.claudeCodeEnabled !== undefined || body.claudeCodeModel !== undefined) {
+      const { setClaudeCodeSettings } = await import('@/lib/agent/claude-code/settings');
+      await setClaudeCodeSettings({
+        enabled: body.claudeCodeEnabled,
+        model: body.claudeCodeModel,
+      });
+    }
+
+    if (body.ollamaApiKey !== undefined) {
+      const { setOllamaApiKey } = await import('@/lib/ollama-api-key');
+      await setOllamaApiKey(body.ollamaApiKey);
+    }
+
     // Если Ollama-настройки менялись — перечитываем и инвалидируем кэш.
     if (ollamaChanged) {
       await reloadSettings();
@@ -123,12 +151,26 @@ export async function POST(req: NextRequest) {
     const settings = await getOllamaSettings();
     const health = await checkOllamaHealth();
     const userDisplayName = await getUserDisplayName();
+    const { getClaudeCodeSettings } = await import('@/lib/agent/claude-code/settings');
+    const { detectClaudeBinary } = await import('@/lib/agent/claude-code/detect');
+    const { listOllamaCloudModels } = await import('@/lib/ollama-cloud-models');
+    const { hasOllamaApiKeyConfigured } = await import('@/lib/ollama-api-key');
+    const cc = await getClaudeCodeSettings();
+    const binary = await detectClaudeBinary();
+    const localModels = health.models ?? [];
+    const availableCloudModels = await listOllamaCloudModels({ localTags: localModels });
     return NextResponse.json({
       ...settings,
+      claudeCodeEnabled: cc.enabled,
+      claudeCodeModel: cc.model,
+      claudeBinaryOk: binary.ok,
+      claudeBinaryError: binary.ok ? undefined : binary.error,
+      ollamaApiKeyConfigured: await hasOllamaApiKeyConfigured(),
       ollamaOk: health.ok,
       ollamaError: health.error,
-      availableModels: health.models ?? [],
-      availableEmbedModels: (health.models ?? []).filter(m =>
+      availableModels: localModels,
+      availableCloudModels,
+      availableEmbedModels: localModels.filter(m =>
         m.startsWith('nomic-embed') ||
         m.startsWith('mxbai-embed') ||
         m.startsWith('bge-m3') ||

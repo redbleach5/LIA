@@ -40,7 +40,14 @@ import { emitAgentEvent, signalCancellation, cancelWaiting } from './events';
 import { waitForUserInput, type AgentCheckpoint } from './wait-input';
 import { getMessages } from '@/lib/memory/episodes';
 import { remember } from '@/lib/memory/vector';
-import { displayAgentGoal, withTemplateOverlay } from './goal-display';
+import { displayAgentGoal } from './goal-display';
+import {
+  buildPlanSystemPrompt,
+  buildExecuteSystemPrompt,
+  buildSynthesizeSystemPrompt,
+  type ExecutePromptMode,
+  type SynthesizeSystemKind,
+} from './phase-prompts';
 import {
   truncateObservationForPrompt,
   truncateObservationForSynthesis,
@@ -58,7 +65,6 @@ import { applyGroundednessFilter } from './kb-groundedness';
 import { packKbEvidenceForSynthesis } from './kb-evidence-pack';
 import { isProjectRootFsScope } from './workspace-scope';
 import { formatAgentStepHistory } from './step-history-compact';
-import { GROUNDING } from '@/lib/prompts/grounding';
 import { stepsHaveRuntimeVerify } from './runtime/verify';
 import { designNeedsRuntimeVerify, inferProjectDesign } from './runtime/infer-design';
 import {
@@ -753,29 +759,16 @@ export async function generatePlan(
     ? `- Follow-up по артефакту: сначала list_tree/read_file в текущем sandbox, потом правка, затем runtime_start. Запрещено начинать с list_sources или ask_user.`
     : '';
 
-  const systemPrompt = withTemplateOverlay(`Ты — планировщик задач для агента Лии.
-Проанализируй задачу пользователя и составь пошаговый план выполнения.
-Учитывай доступные инструменты:
-${toolDescriptions}
-
-Правила:
-- Каждый шаг = одна короткая строка (описание действия), НЕ объект с args
-- Не более ${task.maxSteps} шагов
-- steps НЕ должен быть пустым — минимум 1 конкретный шаг
-- НЕ помещай содержимое файлов, длинный код или аргументы инструментов в план
-- Будь конкретен: вместо "найди информацию" пиши "выполни search_codebase с запросом X" (если инструмент есть в списке)
-- Планируй ТОЛЬКО инструменты из списка выше — не выдумывай недоступные
-- Если задача не требует инструментов — steps должен содержать рассуждения
-- Сложность: low (1-2 шага), medium (3-5), high (6+)
-${explorationHint}
-${kbOnlyHint}
-${createHint}
-${fixHint}
-
-${fsHint}
-
-Верни СТРОГО JSON вида:
-{"goal":"...","steps":["строка шага 1","строка шага 2"],"needsTools":true,"complexity":"medium"}`, task.systemOverlay);
+  const systemPrompt = buildPlanSystemPrompt({
+    toolDescriptions,
+    maxSteps: task.maxSteps,
+    fsHint,
+    explorationHint,
+    kbOnlyHint,
+    createHint,
+    fixHint,
+    systemOverlay: task.systemOverlay,
+  });
 
   try {
     logger.debug('agent', 'Plan generation: calling LLM', { maxTokens: PLANNING_MAX_TOKENS });
@@ -928,66 +921,28 @@ export function buildStepMessages(
   const userGoal = displayAgentGoal(task.goal);
   const planGoal = displayAgentGoal(plan.goal) || userGoal;
 
-  const baseSystem = isKbGoal
-    ? `Ты — агент Лия (женщина). Задача (поиск в базе знаний): "${userGoal}"
+  let mode: ExecutePromptMode = 'general';
+  if (isKbGoal) mode = 'kb';
+  else if (isExploration) {
+    if (hasProjectWorkspace) mode = isLiaWorkspace ? 'explore_lia' : 'explore_external';
+    else mode = 'explore_fallback';
+  } else if (isCreation) {
+    mode = 'create';
+  }
 
-План:
-${planStr}
-
-Доступные инструменты (только KB):
-${toolDescriptions}
-
-${contextStr ? `Контекст:\n${contextStr}\n` : ''}
-${fsHint}
-
-Правила:
-- search_sources → затем для полей/таблиц/подробностей: get_source(sourceId, focusQuery=термины из задачи)
-- folder: read_folder_file(sourceId, relativePath)
-- Не вызывай инструменты вне списка выше — их нет
-- ${GROUNDING.noFabricateFacts} и расшифровки аббревиатур, которых нет в результатах
-- ГОТОВО: только отдельной строкой, когда есть достаточно текста с citation (после get_source / read_folder_file, не после одного короткого search)
-- ask_user — только если цель неоднозначна (неясно ЧТО искать); не спрашивай «какой проект», если источники уже в контексте
-- Не повторяй одни и те же вызовы
-- О себе в русском — женский род (нашла, сделала), не мужской`
-    : `Ты — агент Лия (женщина). Выполняешь задачу: "${userGoal}"
-
-План (${planGoal}):
-${planStr}
-
-Доступные инструменты:
-${toolDescriptions}
-
-${contextStr ? `Контекст:\n${contextStr}\n` : ''}
-${fsHint}
-
-Правила:
-- Вызывай инструмент если нужен внешний ресурс (файл, сеть, поиск, код)
-${isExploration
-  ? hasProjectWorkspace
-    ? (isLiaWorkspace
-      ? `- Анализ проекта: list_tree → grep → read_file. Цитируй пути файлов.
-- Карта кода в контексте — читай перечисленные модули, не только docs
-- Тесты/git в репо: run_command (bun/npm/vitest/git) внутри fsScope; сниппеты — code_run
-- Пустой list_tree / ошибка пути — смени путь или стратегию, не пиши ГОТОВО и не зови ask_user «какой проект»`
-      : `- Анализ репозитория в fsScope: list_tree → list_dir/grep/read_file только по путям из инструментов.
-- Исправления: edit_file только после read_file; маленькие точечные правки, не переписывай целые schema/файлы вслепую.
-- Тесты/git: run_command (bun/npm/pytest/git); force push и git --hard запрещены tool'ом
-- Пустой list_tree / ENOENT — смени путь, не пиши ГОТОВО`)
-    : `- Анализ проекта/кода: list_sources → search_codebase (исходники) и/или search_sources + read_folder_file (документы). Folder KB ≠ .ts исходники.
-- Пустой list_tree / ошибка пути / пустой sandbox — это НЕ конец задачи: смени стратегию (search_codebase / list_sources), не пиши ГОТОВО`
-  : isCreation
-    ? `- СОЗДАНИЕ: ${describePresetForPrompt(resolveCreatePresetId(task.goal))}
-- lia.project.json уже есть (Design Gate) — write_file строго по его tree.
-- После записи сразу runtime_start (без script:"vite"). Verify = HTTP 200 на preview.
-- При ошибке: runtime_logs → edit_file → runtime_start.
-- ГОТОВО только после успешного runtime_start (status healthy).`
-    : '- Если нужен код — полный рабочий код; многофайловый проект — отдельные save_artifact; проверка — run_command или code_run'}
-- "ГОТОВО: <резюме>" или "DONE: <summary>" — только отдельной строкой и только если цель реально закрыта
-- ask_user — только при настоящей неоднозначности цели; не спрашивай из‑за пустого sandbox
-- Ошибки инструментов: смени подход; каждый шаг должен приближать к цели
-- О себе в русском — женский род (сделала, нашла, готова), не мужской`;
-
-  const systemPrompt = withTemplateOverlay(baseSystem, task.systemOverlay);
+  const systemPrompt = buildExecuteSystemPrompt({
+    userGoal,
+    planGoal,
+    planStr,
+    toolDescriptions,
+    contextStr,
+    fsHint,
+    mode,
+    createPresetLine: mode === 'create'
+      ? describePresetForPrompt(resolveCreatePresetId(task.goal))
+      : undefined,
+    systemOverlay: task.systemOverlay,
+  });
 
   const userPrompt = `Предыдущие шаги:
 ${stepsStr}
@@ -1315,28 +1270,18 @@ export async function synthesize(
       ).join('\n')
     : '(контекст диалога отсутствует)';
 
-  const systemPrompt = useGroundedKb
-    ? `Ты готовишь grounded-ответ строго по EVIDENCE (база знаний).
-Верни ТОЛЬКО JSON без markdown-ограждений:
-{"summary":"...","facts":[{"text":"...","citation":"..."}],"missing":null}
-Правила:
-- summary и facts[].text только из EVIDENCE; без общих знаний модели
-- перечисляй конкретные поля/коды/типы, если они есть в EVIDENCE
-- citation из citation/source в EVIDENCE, иначе null
-- не расшифровывай аббревиатуры, если расшифровки нет в EVIDENCE
-- missing только если в EVIDENCE реально нет нужного; не пиши «отфильтровано»
-- на русском; summary до 160 слов`
-    : isCodeCreationGoal(task.goal) && !stepsHaveCreationArtifacts(steps)
-      ? `Ты — Лия. Задача была создать код/файлы, но в шагах НЕТ успешного write_file / edit_file / save_artifact.
-Честно скажи, что файлы на диск не записаны. Не утверждай «я создала игру/сайт/файл», если записи не было.
-Женский род о себе. От первого лица. До 200 слов.`
-    : isCodeCreationGoal(task.goal) && goalRequiresRuntimeVerify(task.goal) && !stepsHaveRuntimeVerify(steps)
-      ? `Ты — Лия. Файлы записаны, но runtime_start не подтвердил запуск (preview/процесс).
-Честно скажи, что артефакт ещё не проверен запуском. Предложи открыть файлы вручную или повторить с runtime.
-Женский род о себе. От первого лица. До 200 слов.`
-    : `Ты — Лия. После цикла исследований и инструментов дай финальный ответ пользователю.
-Опирайся на результаты шагов, цитируй находки, учитывай диалог до задачи.
-Женский род о себе (сделала, нашла, готова — не сделал/нашёл/готов). От первого лица. ${GROUNDING.noFabricateFromSteps} До 400 слов.`;
+  let synthKind: SynthesizeSystemKind = 'default';
+  if (useGroundedKb) synthKind = 'grounded_kb';
+  else if (isCodeCreationGoal(task.goal) && !stepsHaveCreationArtifacts(steps)) {
+    synthKind = 'create_no_artifacts';
+  } else if (
+    isCodeCreationGoal(task.goal)
+    && goalRequiresRuntimeVerify(task.goal)
+    && !stepsHaveRuntimeVerify(steps)
+  ) {
+    synthKind = 'create_no_runtime';
+  }
+  const systemPrompt = buildSynthesizeSystemPrompt(synthKind);
 
   const userPrompt = useGroundedKb
     ? `Задача: "${displayAgentGoal(task.goal)}"

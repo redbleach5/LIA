@@ -42,6 +42,8 @@ export function AgentWorkspaceModeSelector({ disabled, className }: Props) {
   const applyMode = useChatStore(s => s.agentApplyMode);
   const setApplyMode = useChatStore(s => s.setAgentApplyMode);
   const chatMode = useChatStore(s => s.mode);
+  const executor = useChatStore(s => s.activeTaskExecutor);
+  const isClaudeCode = executor === 'claude_code';
   const ActiveIcon = ICONS[mode] ?? Sparkles;
   const autoConfirmed = useRef(false);
   const [confirmAuto, setConfirmAuto] = useState(false);
@@ -49,6 +51,7 @@ export function AgentWorkspaceModeSelector({ disabled, className }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (chatMode !== 'agent') return;
+      if (useChatStore.getState().activeTaskExecutor === 'claude_code') return;
       if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.key.toLowerCase() !== 'a') return;
       e.preventDefault();
       const next = useChatStore.getState().agentApplyMode === 'ask' ? 'auto' : 'ask';
@@ -73,11 +76,19 @@ export function AgentWorkspaceModeSelector({ disabled, className }: Props) {
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger asChild disabled={disabled}>
+        <DropdownMenuTrigger asChild disabled={disabled || isClaudeCode}>
           <button
             type="button"
-            title={`${WORKSPACE_MODE_DESCRIPTIONS[mode]} · ${applyMode === 'ask' ? 'Спрашивать перед записью' : 'Авто-применение'} (Ctrl+Shift+A)`}
-            aria-label={`Доступ агента: ${WORKSPACE_MODE_LABELS[mode]}`}
+            title={
+              isClaudeCode
+                ? 'Backend: Claude Code (режимы Read/Explore/Edit не применяются)'
+                : `${WORKSPACE_MODE_DESCRIPTIONS[mode]} · ${applyMode === 'ask' ? 'Спрашивать перед записью' : 'Авто-применение'} (Ctrl+Shift+A)`
+            }
+            aria-label={
+              isClaudeCode
+                ? 'Claude Code'
+                : `Доступ агента: ${WORKSPACE_MODE_LABELS[mode]}`
+            }
             className={cn(
               'inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium',
               'text-muted-foreground hover:text-foreground hover:bg-surface-2/80',
@@ -87,13 +98,13 @@ export function AgentWorkspaceModeSelector({ disabled, className }: Props) {
             )}
           >
             <ActiveIcon className="w-3.5 h-3.5 shrink-0 text-accent" />
-            <span>{WORKSPACE_MODE_LABELS[mode]}</span>
-            {applyMode === 'auto' ? (
+            <span>{isClaudeCode ? 'Claude Code' : WORKSPACE_MODE_LABELS[mode]}</span>
+            {!isClaudeCode && (applyMode === 'auto' ? (
               <Zap className="w-3 h-3 text-amber-400" aria-label="auto-apply" />
             ) : (
               <Shield className="w-3 h-3 text-sky-400" aria-label="ask-before-write" />
-            )}
-            <ChevronDown className="w-3 h-3 opacity-50" />
+            ))}
+            {!isClaudeCode && <ChevronDown className="w-3 h-3 opacity-50" />}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-72 p-1">
