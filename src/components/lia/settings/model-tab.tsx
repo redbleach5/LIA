@@ -40,10 +40,14 @@ type ModelTabProps = {
   baseUrl: string;
   model: string;
   agentModel: string;
+  secondaryModel: string;
+  heavyModel: string;
   embedModel: string;
   setBaseUrl: (v: string) => void;
   setModel: (v: string) => void;
   setAgentModel: (v: string) => void;
+  setSecondaryModel: (v: string) => void;
+  setHeavyModel: (v: string) => void;
   setEmbedModel: (v: string) => void;
   onSaved: () => Promise<void>;
 };
@@ -53,10 +57,14 @@ export function ModelTab({
   baseUrl,
   model,
   agentModel,
+  secondaryModel,
+  heavyModel,
   embedModel,
   setBaseUrl,
   setModel,
   setAgentModel,
+  setSecondaryModel,
+  setHeavyModel,
   setEmbedModel,
   onSaved,
 }: ModelTabProps) {
@@ -86,6 +94,8 @@ export function ModelTab({
   const persist = async (overrides: {
     model?: string;
     agentModel?: string;
+    secondaryModel?: string;
+    heavyModel?: string;
     embedModel?: string;
     baseUrl?: string;
     claudeCodeEnabled?: boolean;
@@ -96,6 +106,8 @@ export function ModelTab({
     try {
       const nextModel = overrides.model ?? model;
       const nextAgent = overrides.agentModel ?? agentModel;
+      const nextSecondary = overrides.secondaryModel ?? secondaryModel;
+      const nextHeavy = overrides.heavyModel ?? heavyModel;
       const nextEmbed = overrides.embedModel ?? embedModel;
       const rawBase = overrides.baseUrl ?? baseUrl;
       const normalizedBase = rawBase.trim()
@@ -115,6 +127,12 @@ export function ModelTab({
       if (isCloudModelTag(nextAgent)) {
         throw new Error('Cloud-модели нельзя ставить на слот агента — только в «Модель CC» при включённом Claude Code.');
       }
+      if (isCloudModelTag(nextSecondary)) {
+        throw new Error('Cloud-модели нельзя ставить на secondary.');
+      }
+      if (isCloudModelTag(nextHeavy)) {
+        throw new Error('Cloud-модели нельзя ставить на heavy — только локальные теги.');
+      }
       if (isCloudModelTag(nextCcModel) && !nextCcEnabled) {
         throw new Error('Cloud-модель для CC доступна только при включённом Claude Code.');
       }
@@ -127,6 +145,8 @@ export function ModelTab({
         baseUrl: normalizedBase || undefined,
         model: nextModel,
         agentModel: nextAgent,
+        secondaryModel: nextSecondary,
+        heavyModel: nextHeavy,
         embedModel: nextEmbed === 'auto' ? '' : nextEmbed,
         claudeCodeEnabled: nextCcEnabled,
         claudeCodeModel: nextCcModel,
@@ -436,6 +456,95 @@ export function ModelTab({
           value={agentModel}
           onChange={(e) => setAgentModel(e.target.value)}
           placeholder="пусто = как у чата, напр. qwen3:8b"
+          className="text-sm font-mono mt-1"
+        />
+      </div>
+
+      {/* Secondary — trivial turns */}
+      <div className="space-y-1.5">
+        <Label className="text-xs">Secondary (лёгкая)</Label>
+        <p className="text-[10px] text-text-dim leading-snug -mt-0.5 mb-1">
+          Маленькая модель для коротких реплик вроде «привет» — быстрее и меньше греет GPU.
+          Пусто = выкл (всегда модель разговора). Сейчас: {secondaryModel.trim() || 'выкл'}
+        </p>
+        <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto">
+          <button
+            type="button"
+            onClick={() => { setSecondaryModel(''); void persist({ secondaryModel: '' }); }}
+            className={cn(
+              'text-left text-xs px-2 py-1.5 rounded border transition-colors col-span-2',
+              secondaryModel === ''
+                ? 'border-accent bg-accent/10 text-accent'
+                : 'border-border hover:border-accent/50',
+            )}
+          >
+            Не использовать
+          </button>
+          {chatModels.map(m => (
+            <button
+              key={`sec-${m}`}
+              type="button"
+              onClick={() => { setSecondaryModel(m); void persist({ secondaryModel: m }); }}
+              className={cn(
+                'text-left text-xs px-2 py-1.5 rounded border transition-colors',
+                secondaryModel === m
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-border hover:border-accent/50',
+              )}
+            >
+              <span className="truncate font-mono">{m}</span>
+            </button>
+          ))}
+        </div>
+        <Input
+          value={secondaryModel}
+          onChange={(e) => setSecondaryModel(e.target.value)}
+          placeholder="пусто = выкл"
+          className="text-sm font-mono mt-1"
+        />
+      </div>
+
+      {/* Heavy — escalate */}
+      <div className="space-y-1.5">
+        <Label className="text-xs">Heavy (тяжёлая)</Label>
+        <p className="text-[10px] text-text-dim leading-snug -mt-0.5 mb-1">
+          Более сильная модель только для «мозга» агента: сложный план, исследование,
+          застрявший цикл. Ответ пользователю по-прежнему пишет модель разговора (голос Лии).
+          В обычном чате не включается. Пусто = выкл. Сейчас: {heavyModel.trim() || 'выкл'}
+        </p>
+        <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto">
+          <button
+            type="button"
+            onClick={() => { setHeavyModel(''); void persist({ heavyModel: '' }); }}
+            className={cn(
+              'text-left text-xs px-2 py-1.5 rounded border transition-colors col-span-2',
+              heavyModel === ''
+                ? 'border-accent bg-accent/10 text-accent'
+                : 'border-border hover:border-accent/50',
+            )}
+          >
+            Не использовать
+          </button>
+          {chatModels.map(m => (
+            <button
+              key={`heavy-${m}`}
+              type="button"
+              onClick={() => { setHeavyModel(m); void persist({ heavyModel: m }); }}
+              className={cn(
+                'text-left text-xs px-2 py-1.5 rounded border transition-colors',
+                heavyModel === m
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-border hover:border-accent/50',
+              )}
+            >
+              <span className="truncate font-mono">{m}</span>
+            </button>
+          ))}
+        </div>
+        <Input
+          value={heavyModel}
+          onChange={(e) => setHeavyModel(e.target.value)}
+          placeholder="пусто = выкл"
           className="text-sm font-mono mt-1"
         />
       </div>

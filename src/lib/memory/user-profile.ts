@@ -1,31 +1,50 @@
 import 'server-only';
 
 import {
-  USER_NAME_FACT_KEY,
-  deleteGlobalFact,
-  getGlobalFact,
-  upsertGlobalFact,
-} from './facts';
+  createPerson,
+  getDefaultPerson,
+  listPeople,
+  updatePerson,
+  type PersonRecord,
+} from './people';
+import { migrateLegacyUserFactsToPeople } from './person-binding';
 
-const MAX_DISPLAY_NAME_LEN = 80;
+export { MAX_DISPLAY_NAME_LEN } from './people';
 
-/** Display name from global fact user.name (settings + fact extraction). */
+/** Display name = default (or only) person's name after migrate. */
 export async function getUserDisplayName(): Promise<string | null> {
-  const name = await getGlobalFact(USER_NAME_FACT_KEY);
-  const trimmed = name?.trim();
-  return trimmed ? trimmed : null;
+  await migrateLegacyUserFactsToPeople();
+  const person = await getDefaultPerson();
+  const name = person?.displayName?.trim();
+  return name ? name : null;
 }
 
+/**
+ * Set display name on the default person (create if none).
+ * Empty string deletes nothing — clears to remove default name by deleting person
+ * only when they have no other facts... Plan: empty → delete person if sole empty.
+ * Keep simple: empty → rename not allowed; delete via people API. Here empty clears
+ * by updating default person name only if we keep person — better create/update.
+ */
 export async function setUserDisplayName(name: string): Promise<void> {
+  await migrateLegacyUserFactsToPeople();
   const trimmed = name.trim();
+  const people = await listPeople();
+  const def = people.find((p) => p.isDefault) ?? people[0] ?? null;
+
   if (!trimmed) {
-    await deleteGlobalFact(USER_NAME_FACT_KEY);
+    // Compatibility: clearing settings name does not wipe all people.
     return;
   }
-  if (trimmed.length > MAX_DISPLAY_NAME_LEN) {
-    throw new Error(`display name too long (max ${MAX_DISPLAY_NAME_LEN})`);
+
+  if (def) {
+    await updatePerson(def.id, { displayName: trimmed, isDefault: true });
+    return;
   }
-  await upsertGlobalFact(USER_NAME_FACT_KEY, trimmed, 1);
+  await createPerson({ displayName: trimmed, isDefault: true });
 }
 
-export { MAX_DISPLAY_NAME_LEN };
+export async function listPeopleForSettings(): Promise<PersonRecord[]> {
+  await migrateLegacyUserFactsToPeople();
+  return listPeople();
+}

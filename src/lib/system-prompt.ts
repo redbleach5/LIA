@@ -1,14 +1,15 @@
 // System prompt builder — adaptive, no hard length limits.
 //
-// Layout: STATIC_CORE (stable) + conditional playbooks + tier + self-awareness +
-// stable context + volatile tail (liaDecision last for KV-cache).
+// Layout: identity summary + STATIC_CORE (stable) + playbooks + tier +
+// stable context + volatile (dialogue turn contract, RAG/KB/web, liaDecision).
 //
 // Conflict priority (when instructions clash):
 //   1. Safety / ethical blocks (pipeline, not here)
-//   2. STATIC_CORE brevity + «не ассистент»
-//   3. liaDecision (tone, willingness) in volatile tail
-//   4. Tier length hints
-//   5. Character taste / playbooks
+//   2. Dialogue turn contract (mayGreet / self-intro) — product state
+//   3. STATIC_CORE brevity + «не ассистент»
+//   4. liaDecision (tone, willingness) in volatile tail
+//   5. Tier length hints
+//   6. Character taste / playbooks
 
 import type { EmotionVector } from './personality';
 import { emotionToText } from './emotion';
@@ -32,11 +33,17 @@ import {
 } from './prompts/chat-profile';
 import { getCharacterSummary } from './identity/character';
 import { footprintFromPrompt, type SystemPromptFootprint } from './prompts/prompt-footprint';
+import {
+  deriveDialogueTurnContract,
+  formatDialogueTurnContract,
+  type DialogueTurnContract,
+} from './chat/dialogue-turn-contract';
 
 export type { SystemPromptFootprint } from './prompts/prompt-footprint';
 
 export type { ChatPromptProfile } from './prompts/chat-profile';
 export { resolveChatPromptProfile } from './prompts/chat-profile';
+export type { DialogueTurnContract } from './chat/dialogue-turn-contract';
 
 export type SystemPromptContext = {
   emotion: EmotionVector;
@@ -46,6 +53,10 @@ export type SystemPromptContext = {
   openTasks?: string;
   /** Last agent sandbox with files (paths for «открой игру»). */
   recentArtifacts?: string;
+  /**
+   * @deprecated Unused — dialogue history is in messages[]; do not reinject
+   * raw Lia openings (toxic few-shot for hello-loop).
+   */
   recentLiaMessages?: string;
   mode?: 'auto' | 'agent';
   tier?: Tier;
@@ -72,6 +83,11 @@ export type SystemPromptContext = {
   episodeUserTurnCount?: number;
   /** Chat already had hello from user or Lia */
   episodeHasPriorGreeting?: boolean;
+  /** Unbound multi-person episode — ask who is speaking. */
+  needIdentifySpeaker?: boolean;
+  knownPeopleNames?: string[];
+  /** Pre-derived contract; if omitted, derived from greeting/acquaintance fields. */
+  dialogueContract?: DialogueTurnContract;
   promptMode?: 'full' | 'adaptive' | 'minimal';
   /** Override auto profile (debug). */
   chatProfile?: ChatPromptProfile;
@@ -342,14 +358,8 @@ export function buildSystemPromptFootprint(ctx: SystemPromptContext): SystemProm
   if (ctx.ragHits && includeCtx(!isKbQuestion && !isWebSearch && !isTrivial)) {
     volatileParts.push(`\nРелевантные воспоминания из этого чата:\n${ctx.ragHits}`);
   }
-  if (ctx.recentLiaMessages) {
-    volatileParts.push(`\nТвои последние сообщения (не повторяй их):\n${ctx.recentLiaMessages}`);
-    if (ctx.episodeHasPriorGreeting || (ctx.episodeUserTurnCount ?? 0) > 1) {
-      volatileParts.push(
-        'Если в прошлых репликах ты уже писала «Привет» — не копируй это. Новое сообщение без приветствия.',
-      );
-    }
-  }
+  // recentLiaMessages intentionally ignored — duplicates history and few-shots hello-loop.
+
   if (ctx.webSearchContext) {
     volatileParts.push(`\n${ctx.webSearchContext}`);
   }
@@ -359,39 +369,20 @@ export function buildSystemPromptFootprint(ctx: SystemPromptContext): SystemProm
 Правила (фрагменты KB выше): только факты из блока; без web_search и общих знаний; citation [источник > раздел]; иначе — «В базе знаний не нашла…».`);
   }
 
-  if (isTrivial) {
-    if (!ctx.userNameKnown && ctx.episodeUserTurnCount === 1 && !ctx.episodeHasPriorGreeting) {
-      volatileParts.push(
-        '\nСейчас первое сообщение и имя собеседника неизвестно: коротко поздоровайся (1–2 предложения) и задай один вопрос — как зовут. Без списка инструментов и возможностей.',
-      );
-    } else if (ctx.episodeHasPriorGreeting || (ctx.episodeUserTurnCount ?? 0) > 1) {
-      volatileParts.push(
-        '\nЗАПРЕТ: не начинай ответ с «Привет» / «Здравствуй» / «Hi» / «Рада тебя видеть» — в этом чате разговор уже идёт. Сразу по сути, тепло и кратко.',
-      );
-    } else {
-      volatileParts.push(
-        '\nСейчас короткая реплика (привет / как дела): ответь тепло и очень кратко, без перечисления инструментов и возможностей. Не начинай каждое следующее сообщение снова с «Привет».',
-      );
-    }
-  } else {
-    // Non-trivial: never inject an answer agenda (ask-name / self-intro) over the user ask.
-    volatileParts.push(
-      '\nСначала ответь на сообщение пользователя по существу. '
-      + 'Имя или самопрезентацию — только если уместно и не вместо ответа.',
-    );
-    if (profile === 'companion') {
-      volatileParts.push('Режим собеседника: без списка инструментов и «я умею всё». Просто живой ответ.');
-    }
-  }
+  const dialogueContract = ctx.dialogueContract ?? deriveDialogueTurnContract({
+    isTrivialGreeting: ctx.isTrivialGreeting,
+    isTrivialHowAreYou: ctx.isTrivialHowAreYou,
+    isAcquaintanceRequest: ctx.isAcquaintanceRequest,
+    userNameKnown: ctx.userNameKnown,
+    episodeUserTurnCount: ctx.episodeUserTurnCount,
+    episodeHasPriorGreeting: ctx.episodeHasPriorGreeting,
+    needIdentifySpeaker: ctx.needIdentifySpeaker,
+    knownPeopleNames: ctx.knownPeopleNames,
+  });
+  volatileParts.push(formatDialogueTurnContract(dialogueContract));
 
-  // Ongoing chat: always reinforce no-hello-loop (models love opening with «Привет»).
-  if (
-    (ctx.episodeHasPriorGreeting || (ctx.episodeUserTurnCount ?? 0) > 1)
-    && !(isTrivial && !ctx.userNameKnown && ctx.episodeUserTurnCount === 1 && !ctx.episodeHasPriorGreeting)
-  ) {
-    volatileParts.push(
-      '\nСнова: не открывай реплику приветствием. Первое слово — не «Привет» и не «Здравствуй».',
-    );
+  if (!isTrivial && profile === 'companion') {
+    volatileParts.push('Режим собеседника: без списка инструментов и «я умею всё». Просто живой ответ.');
   }
 
   if (ctx.liaDecision) {

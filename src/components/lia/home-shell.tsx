@@ -5,13 +5,14 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { ClientBootstrap } from '@/components/lia/client-bootstrap';
 import { HeaderStatus } from '@/components/lia/header-status';
 import { OllamaBanner } from '@/components/lia/ollama-banner';
-import { SettingsDialogLazy } from '@/components/lia/settings-dialog-lazy';
+import { SettingsLink } from '@/components/lia/settings-link';
 import { KbSidebar } from '@/components/lia/kb-sidebar';
 import { ShortcutsHelp } from '@/components/lia/shortcuts-help';
 import { PanelErrorBoundary } from '@/components/lia/panel-error-boundary';
 import { LIA_APP_EVENTS, dispatchLiaAppEvent, onLiaAppEvent } from '@/lib/lia-app-events';
 import { useChatStore } from '@/stores/chat-store';
 import { normalizeChatMode } from '@/lib/chat-modes';
+import { useRouter } from 'next/navigation';
 
 const EpisodesSidebar = dynamic(
   () => import('@/components/lia/episodes-sidebar').then(m => ({ default: m.EpisodesSidebar })),
@@ -80,6 +81,7 @@ function getInitialAvatarMode(): AvatarMode {
 //   • <1200px: auto-collapse episodes + prefer portrait over full
 // ============================================================================
 export function HomeShell() {
+  const router = useRouter();
   // Always start with SSR-safe defaults — restore from localStorage after mount
   // so the first client render matches the server HTML (no hydration mismatch).
   const [avatarMode, setAvatarMode] = useState<AvatarMode>('full');
@@ -174,7 +176,7 @@ export function HomeShell() {
     } else if (e.key === ',') {
       if (inEditable) return;
       e.preventDefault();
-      dispatchLiaAppEvent(LIA_APP_EVENTS.openSettings);
+      router.push('/settings/model');
     } else if ((e.key === 'a' || e.key === 'A') && e.shiftKey) {
       if (inEditable) return;
       // In agent mode Ctrl+Shift+A toggles Apply ask|auto (AgentWorkspaceModeSelector).
@@ -182,7 +184,7 @@ export function HomeShell() {
       e.preventDefault();
       cycleAvatarMode();
     }
-  }, [toggleEpisodes, toggleKb, cycleAvatarMode]);
+  }, [toggleEpisodes, toggleKb, cycleAvatarMode, router]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleHotkeys);
@@ -193,6 +195,13 @@ export function HomeShell() {
     const openKb = () => setKbOpen(true);
     return onLiaAppEvent(LIA_APP_EVENTS.openKb, openKb);
   }, []);
+
+  // Legacy openSettings event → full settings page
+  useEffect(() => {
+    return onLiaAppEvent(LIA_APP_EVENTS.openSettings, () => {
+      router.push('/settings/model');
+    });
+  }, [router]);
 
   // Clear legacy focus-mode flag if present
   useEffect(() => {
@@ -229,7 +238,7 @@ export function HomeShell() {
           onToggleKb={toggleKb}
           onOpenShortcuts={() => setShortcutsOpen(true)}
         />
-        <SettingsDialogLazy />
+        <SettingsLink />
       </header>
 
       <OllamaBanner />

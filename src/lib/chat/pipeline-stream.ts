@@ -5,14 +5,14 @@ import 'server-only';
 // ============================================================================
 
 import { streamText, isStepCount, type ModelMessage } from 'ai';
-import { getChatModel, getModelName, setOllamaNumCtx } from '@/lib/ollama';
+import { getChatModel, getModelName, setOllamaNumCtx, setOllamaKeepAlive } from '@/lib/ollama';
 import { buildChatTools } from '@/lib/tools';
 import { summarizeLlmError } from '@/lib/llm/error-summary';
 import type { ModelChoice } from '@/lib/chat/model-selection';
 import type { Tier } from '@/lib/capability-profile';
 import type { TaskComplexity } from '@/lib/task-complexity';
 import { resolveModelToolsSupport } from '@/lib/llm/tool-support';
-import { resolveInferenceNumCtx } from '@/lib/chat/context-budget';
+import { resolveInferenceNumCtx, type PoolAwareCtxInput } from '@/lib/chat/context-budget';
 import { decideChatTools } from './chat-tools';
 import { persistChatTurn } from './persist-turn';
 import { encodeStreamErrorMessage } from './stream-error';
@@ -88,25 +88,40 @@ export async function runChatStreamText(params: {
   modelChoice: ModelChoice;
   /** From capability profile — drives Ollama num_ctx. */
   contextWindow?: number;
+  /** VRAM pool — caps num_ctx for full-GPU residency. */
+  pool?: PoolAwareCtxInput;
 }) {
   const {
     systemPrompt, deliberateContext, coreMessages, userMode, tier, complexity, plan,
     webSearchContext, kbAnswerLocked, episodeId, text, perceivedEmotion, triggers,
     abortSignal, log, streamError, pinnedSourceIds, modelChoice,
     contextWindow = 0,
+    pool,
   } = params;
 
   const tools = buildChatTools({ pinnedSourceIds });
 
-  const model = await getChatModel(modelChoice.usedSecondary ? modelChoice.modelName : undefined);
+  const model = await getChatModel(
+    modelChoice.usedSecondary || modelChoice.usedHeavy
+      ? modelChoice.modelName
+      : undefined,
+  );
   const startTime = Date.now();
-  const modelName = modelChoice.usedSecondary ? modelChoice.modelName : await getModelName();
+  const modelName = (modelChoice.usedSecondary || modelChoice.usedHeavy)
+    ? modelChoice.modelName
+    : await getModelName();
   // Prefer Ollama capabilities + heuristics — avoids AI_APICallError
   // "model does not support tools" (e.g. dolphin-mistral-nemo on Ollama).
   const toolsSupported = await resolveModelToolsSupport(modelName);
 
   if (modelChoice.usedSecondary) {
     log.info('chat', 'Using secondary (small) model for trivial query', {
+      model: modelName,
+      reason: modelChoice.reason,
+    });
+  }
+  if (modelChoice.usedHeavy) {
+    log.info('chat', 'Using heavy model for hard query', {
       model: modelName,
       reason: modelChoice.reason,
     });
@@ -134,9 +149,20 @@ export async function runChatStreamText(params: {
     ? (tier === 'max' ? 8 : tier === 'plus' ? 6 : 5)
     : (tier === 'max' ? 7 : tier === 'plus' ? 6 : 5);
 
-  const numCtx = resolveInferenceNumCtx(contextWindow, tier);
-  log.debug('chat', 'Ollama num_ctx', { numCtx, contextWindow, tier });
+  const numCtx = resolveInferenceNumCtx(contextWindow, tier, pool);
+  log.debug('chat', 'Ollama num_ctx', {
+    numCtx,
+    contextWindow,
+    tier,
+    vramPoolGb: pool?.vramPoolGb,
+    vramPoolKnown: pool?.vramPoolKnown,
+  });
   setOllamaNumCtx(numCtx);
+  // Heavy escalate: short keep_alive so day residency is not displaced indefinitely.
+  if (modelChoice.usedHeavy) {
+    setOllamaKeepAlive('0');
+    log.info('chat', 'Heavy residency: keep_alive=0', { model: modelName });
+  }
 
   return streamText({
     model,
@@ -167,6 +193,7 @@ export async function runChatStreamText(params: {
     },
     onFinish: async ({ text: fullText, usage }) => {
       setOllamaNumCtx(undefined);
+      setOllamaKeepAlive(undefined);
       await persistChatTurn({
         fullText, usage, startTime, episodeId, text, perceivedEmotion, triggers,
         plan, log,

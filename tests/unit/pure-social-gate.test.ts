@@ -58,7 +58,8 @@ describe('pure-social gate — contract', () => {
       episodeUserTurnCount: 1,
       episodeHasPriorGreeting: false,
     });
-    expect(prompt).toContain('Сначала ответь на сообщение пользователя');
+    expect(prompt).toContain('СОСТОЯНИЕ ДИАЛОГА');
+    expect(prompt).toContain('скажи «я Лия»');
     expect(prompt).not.toContain('задай один вопрос — как зовут');
     expect(prompt).not.toContain('короткая реплика (привет / как дела)');
   });

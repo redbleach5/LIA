@@ -11,6 +11,11 @@ export type Settings = {
   agentModel: string;
   /** Effective model the agent will use. */
   agentModelEffective?: string;
+  /** Secondary (trivial); empty = unset. */
+  secondaryModel?: string;
+  /** Heavy (escalate); empty = unset. */
+  heavyModel?: string;
+  heavyModelEffective?: string;
   embedModel: string;
   /** Claude Code coding backend (Ollama Anthropic API). */
   claudeCodeEnabled?: boolean;
@@ -28,6 +33,17 @@ export type Settings = {
   vrmFiles: string[];
   activeVrm: string | null;
   avatarConfig: AvatarConfig;
-  /** user.name global fact — как Лия обращается к вам */
+  /** user.name / default person — как Лия обращается к вам */
   userDisplayName: string | null;
+  /** Up to 3 remembered people */
+  people?: SettingsPerson[];
+  maxPeople?: number;
+};
+
+export type SettingsPerson = {
+  id: string;
+  displayName: string;
+  aliases: string[];
+  isDefault: boolean;
+  lastSeenAt: string | null;
 };

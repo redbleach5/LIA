@@ -1,4 +1,11 @@
-// Cognitive Depth — adaptive pipeline selection (tier × complexity × mode).
+/**
+ * Cognitive Depth — adaptive pipeline selection (tier × complexity × mode).
+ *
+ * Matrix gates **toolsEnabled** + **maxTokens** only.
+ * Deliberate LLM pre-calls are permanently off (TTFT / latency pass).
+ * Proactive web search is driven by `needsProactiveWebSearch` in task-complexity,
+ * not by a dead plan.autoWebSearch flag.
+ */
 
 import type { CognitiveParams, Tier } from '@/lib/capability-profile';
 import { getTierParams } from '@/lib/capability-profile';
@@ -17,12 +24,11 @@ export type ExecutionPlan = {
   selfCheck: boolean;
   maxTokens: number;
   toolsEnabled: boolean;
-  autoWebSearch: boolean;
 };
 
 type PlanSlice = Pick<
   ExecutionPlan,
-  'calls' | 'deliberate' | 'selfCheck' | 'maxTokens' | 'autoWebSearch'
+  'calls' | 'deliberate' | 'selfCheck' | 'maxTokens'
 >;
 
 const AGENT_PLAN: Omit<ExecutionPlan, 'tier' | 'complexity' | 'maxTokens'> = {
@@ -33,38 +39,37 @@ const AGENT_PLAN: Omit<ExecutionPlan, 'tier' | 'complexity' | 'maxTokens'> = {
   // Streaming self-check cannot revise the answer — keep off (quality-log theater).
   selfCheck: false,
   toolsEnabled: true,
-  autoWebSearch: true,
 };
 
 /** Latency pass: deliberate always off — character via STATIC_CORE + fallback decision. */
 const EXECUTION_MATRIX: Record<Tier, Record<TaskComplexity, PlanSlice>> = {
   micro: {
-    trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 512, autoWebSearch: false },
-    simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 1024, autoWebSearch: true },
-    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: true },
-    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: true },
-    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: true },
+    trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 512 },
+    simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 1024 },
+    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048 },
+    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048 },
+    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048 },
   },
   standard: {
-    trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 512, autoWebSearch: false },
-    simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: false },
-    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096, autoWebSearch: false },
-    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096, autoWebSearch: false },
-    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096, autoWebSearch: true },
+    trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 512 },
+    simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048 },
+    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096 },
+    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096 },
+    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096 },
   },
   plus: {
-    trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 1024, autoWebSearch: false },
-    simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: false },
-    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096, autoWebSearch: false },
-    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 8192, autoWebSearch: false },
-    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 8192, autoWebSearch: true },
+    trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 1024 },
+    simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048 },
+    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 4096 },
+    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 8192 },
+    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 8192 },
   },
   max: {
-    trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 1024, autoWebSearch: false },
-    simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048, autoWebSearch: false },
-    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 8192, autoWebSearch: false },
-    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 16384, autoWebSearch: false },
-    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 16384, autoWebSearch: true },
+    trivial: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 1024 },
+    simple: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 2048 },
+    moderate: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 8192 },
+    complex: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 16384 },
+    research: { calls: 1, deliberate: false, selfCheck: false, maxTokens: 16384 },
   },
 };
 
@@ -81,7 +86,6 @@ function planAuto(tier: Tier, complexity: TaskComplexity, tierParams: CognitiveP
     selfCheck: slice.selfCheck,
     maxTokens: slice.maxTokens,
     toolsEnabled: tierParams.toolsEnabled && !lightTurn,
-    autoWebSearch: slice.autoWebSearch ?? tierParams.autoWebSearch,
   };
 }
 

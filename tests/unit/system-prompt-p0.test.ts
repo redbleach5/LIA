@@ -15,7 +15,9 @@ describe('system prompt P0', () => {
     });
     expect(prompt).not.toContain('search_sources');
     expect(prompt).toContain('1–2 предложения');
-    expect(prompt).toContain('короткая реплика');
+    expect(prompt).toContain('СОСТОЯНИЕ ДИАЛОГА');
+    expect(prompt).toContain('mayGreet=true');
+    expect(prompt).toContain('коротко поздоровайся');
     expect(prompt).toContain('ОДИН ВОПРОС');
   });
 

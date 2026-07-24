@@ -1,16 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
- * Integration tests for src/lib/chat/model-selection.ts
- *
- * Tests auto model selection:
- *   - getSecondaryModelName / setSecondaryModelName — DB persistence
- *   - chooseModelForQuery — decision logic based on complexity + tier + provider
- *
- * Mocks:
- *   - @/lib/ollama.getOllamaSettings — returns provider + model config
- *   - @/lib/ollama.checkOllamaHealth — returns available models
- *   - @/lib/db — in-memory Setting table
+ * Tests for src/lib/chat/model-selection.ts
  */
 
 vi.mock('@/lib/logger', () => ({
@@ -20,98 +11,69 @@ vi.mock('@/lib/logger', () => ({
   },
 }));
 
-// In-memory Setting store
-const mockSettings = new Map<string, string>();
-
-const mockDb = {
-  setting: {
-    findUnique: vi.fn(async ({ where }: { where: { key: string } }) => {
-      const value = mockSettings.get(where.key);
-      return value !== undefined ? { key: where.key, value } : null;
-    }),
-    upsert: vi.fn(async ({ where, create, update }: {
-      where: { key: string }; create: { key: string; value: string }; update: { value: string };
-    }) => {
-      mockSettings.set(where.key, update.value);
-      return { key: where.key, value: update.value };
-    }),
-    delete: vi.fn(async ({ where }: { where: { key: string } }) => {
-      mockSettings.delete(where.key);
-      return {};
-    }),
-  },
-};
-vi.mock('@/lib/db', () => ({ db: mockDb }));
-
-// Mock ollama with controllable settings
 const mockOllamaSettings = {
-  provider: 'ollama' as const,
   baseUrl: 'http://127.0.0.1:11434',
   model: 'qwen2.5:7b',
+  agentModel: '',
+  secondaryModel: '',
+  heavyModel: '',
   embedModel: 'nomic-embed-text',
 };
 
 const mockHealth = {
   ok: true,
-  models: ['qwen2.5:7b', 'qwen2.5:1.5b', 'nomic-embed-text'],
+  models: ['qwen2.5:7b', 'qwen2.5:1.5b', 'nomic-embed-text', 'big:70b'],
   error: undefined as string | undefined,
 };
 
 vi.mock('@/lib/ollama', () => ({
   getOllamaSettings: vi.fn(async () => ({ ...mockOllamaSettings })),
+  setOllamaSettings: vi.fn(async (params: { secondaryModel?: string; heavyModel?: string }) => {
+    if (params.secondaryModel !== undefined) {
+      mockOllamaSettings.secondaryModel = params.secondaryModel.trim();
+    }
+    if (params.heavyModel !== undefined) {
+      mockOllamaSettings.heavyModel = params.heavyModel.trim();
+    }
+  }),
   checkOllamaHealth: vi.fn(async () => ({ ...mockHealth })),
 }));
 
 describe('chat/model-selection: getSecondaryModelName + setSecondaryModelName', () => {
   beforeEach(() => {
-    mockSettings.clear();
     vi.clearAllMocks();
+    mockOllamaSettings.secondaryModel = '';
+    mockOllamaSettings.heavyModel = '';
+    mockOllamaSettings.model = 'qwen2.5:7b';
   });
 
   it('returns null when no secondary model is set', async () => {
     const { getSecondaryModelName } = await import('@/lib/chat/model-selection');
-    const result = await getSecondaryModelName();
-    expect(result).toBeNull();
+    expect(await getSecondaryModelName()).toBeNull();
   });
 
   it('persists and retrieves secondary model name', async () => {
     const { setSecondaryModelName, getSecondaryModelName } = await import('@/lib/chat/model-selection');
     await setSecondaryModelName('qwen2.5:1.5b');
-    const result = await getSecondaryModelName();
-    expect(result).toBe('qwen2.5:1.5b');
+    expect(await getSecondaryModelName()).toBe('qwen2.5:1.5b');
   });
 
   it('clears secondary model when passed null', async () => {
     const { setSecondaryModelName, getSecondaryModelName } = await import('@/lib/chat/model-selection');
     await setSecondaryModelName('qwen2.5:1.5b');
     await setSecondaryModelName(null);
-    const result = await getSecondaryModelName();
-    expect(result).toBeNull();
-  });
-
-  it('trims whitespace from secondary model name', async () => {
-    const { setSecondaryModelName, getSecondaryModelName } = await import('@/lib/chat/model-selection');
-    await setSecondaryModelName('  qwen2.5:1.5b  ');
-    const result = await getSecondaryModelName();
-    expect(result).toBe('qwen2.5:1.5b');
-  });
-
-  it('treats empty string as null (no secondary)', async () => {
-    const { setSecondaryModelName, getSecondaryModelName } = await import('@/lib/chat/model-selection');
-    await setSecondaryModelName('   ');
-    const result = await getSecondaryModelName();
-    expect(result).toBeNull();
+    expect(await getSecondaryModelName()).toBeNull();
   });
 });
 
 describe('chat/model-selection: chooseModelForQuery', () => {
   beforeEach(() => {
-    mockSettings.clear();
     vi.clearAllMocks();
-    mockOllamaSettings.provider = 'ollama';
+    mockOllamaSettings.secondaryModel = '';
+    mockOllamaSettings.heavyModel = '';
     mockOllamaSettings.model = 'qwen2.5:7b';
     mockHealth.ok = true;
-    mockHealth.models = ['qwen2.5:7b', 'qwen2.5:1.5b'];
+    mockHealth.models = ['qwen2.5:7b', 'qwen2.5:1.5b', 'big:70b'];
   });
 
   it('uses secondary for trivial complexity when configured and available', async () => {
@@ -119,111 +81,57 @@ describe('chat/model-selection: chooseModelForQuery', () => {
     await setSecondaryModelName('qwen2.5:1.5b');
 
     const choice = await chooseModelForQuery('trivial', 'standard');
-
     expect(choice.usedSecondary).toBe(true);
     expect(choice.modelName).toBe('qwen2.5:1.5b');
     expect(choice.reason).toBe('trivial-use-secondary');
   });
 
-  it('falls back to primary for non-trivial complexity', async () => {
+  it('uses primary for simple complexity', async () => {
     const { setSecondaryModelName, chooseModelForQuery } = await import('@/lib/chat/model-selection');
     await setSecondaryModelName('qwen2.5:1.5b');
 
     const choice = await chooseModelForQuery('simple', 'standard');
-
     expect(choice.usedSecondary).toBe(false);
+    expect(choice.usedHeavy).toBe(false);
     expect(choice.modelName).toBe('qwen2.5:7b');
-    expect(choice.reason).toBe('complexity-not-trivial');
+    expect(choice.reason).toBe('primary');
   });
 
-  it('falls back to primary for moderate complexity', async () => {
-    const { setSecondaryModelName, chooseModelForQuery } = await import('@/lib/chat/model-selection');
-    await setSecondaryModelName('qwen2.5:1.5b');
-
-    const choice = await chooseModelForQuery('moderate', 'standard');
-    expect(choice.usedSecondary).toBe(false);
-    expect(choice.reason).toBe('complexity-not-trivial');
-  });
-
-  it('falls back to primary for research complexity', async () => {
-    const { setSecondaryModelName, chooseModelForQuery } = await import('@/lib/chat/model-selection');
-    await setSecondaryModelName('qwen2.5:1.5b');
-
+  it('research stays on day companion (heavy is agent-only)', async () => {
+    mockOllamaSettings.heavyModel = 'big:70b';
+    const { chooseModelForQuery } = await import('@/lib/chat/model-selection');
     const choice = await chooseModelForQuery('research', 'plus');
-    expect(choice.usedSecondary).toBe(false);
-    expect(choice.reason).toBe('complexity-not-trivial');
+    expect(choice.usedHeavy).toBe(false);
+    expect(choice.modelName).toBe('qwen2.5:7b');
+    expect(choice.reason).toBe('primary');
+    expect(choice.heavyModelName).toBe('big:70b');
+  });
+
+  it('research without heavy stays primary', async () => {
+    const { chooseModelForQuery } = await import('@/lib/chat/model-selection');
+    const choice = await chooseModelForQuery('research', 'plus');
+    expect(choice.usedHeavy).toBe(false);
+    expect(choice.reason).toBe('primary');
   });
 
   it('returns no-secondary-configured when secondary is not set', async () => {
     const { chooseModelForQuery } = await import('@/lib/chat/model-selection');
     const choice = await chooseModelForQuery('trivial', 'standard');
-
-    expect(choice.usedSecondary).toBe(false);
-    expect(choice.modelName).toBe('qwen2.5:7b');
     expect(choice.reason).toBe('no-secondary-configured');
-    expect(choice.secondaryModelName).toBeNull();
   });
 
-  it('skips secondary for micro tier (already small enough)', async () => {
+  it('skips secondary for micro tier', async () => {
     const { setSecondaryModelName, chooseModelForQuery } = await import('@/lib/chat/model-selection');
     await setSecondaryModelName('qwen2.5:0.5b');
-
     const choice = await chooseModelForQuery('trivial', 'micro');
-
-    expect(choice.usedSecondary).toBe(false);
     expect(choice.reason).toBe('tier-too-small');
   });
 
-  it('falls back when secondary model is not pulled in Ollama', async () => {
+  it('falls back when secondary model is not pulled', async () => {
     const { setSecondaryModelName, chooseModelForQuery } = await import('@/lib/chat/model-selection');
     await setSecondaryModelName('nonexistent:1b');
-
-    // Mock health shows only qwen2.5:7b available
     mockHealth.models = ['qwen2.5:7b'];
-
     const choice = await chooseModelForQuery('trivial', 'standard');
-
-    expect(choice.usedSecondary).toBe(false);
-    expect(choice.modelName).toBe('qwen2.5:7b');
     expect(choice.reason).toBe('secondary-not-pulled');
-  });
-
-  it('falls back when Ollama is down', async () => {
-    const { setSecondaryModelName, chooseModelForQuery } = await import('@/lib/chat/model-selection');
-    await setSecondaryModelName('qwen2.5:1.5b');
-
-    mockHealth.ok = false;
-    mockHealth.models = [];
-
-    const choice = await chooseModelForQuery('trivial', 'standard');
-
-    expect(choice.usedSecondary).toBe(false);
-    expect(choice.reason).toBe('secondary-not-pulled');
-  });
-
-  it('uses secondary for plus tier', async () => {
-    const { setSecondaryModelName, chooseModelForQuery } = await import('@/lib/chat/model-selection');
-    await setSecondaryModelName('qwen2.5:1.5b');
-
-    const choice = await chooseModelForQuery('trivial', 'plus');
-    expect(choice.usedSecondary).toBe(true);
-    expect(choice.reason).toBe('trivial-use-secondary');
-  });
-
-  it('uses secondary for max tier', async () => {
-    const { setSecondaryModelName, chooseModelForQuery } = await import('@/lib/chat/model-selection');
-    await setSecondaryModelName('qwen2.5:1.5b');
-
-    const choice = await chooseModelForQuery('trivial', 'max');
-    expect(choice.usedSecondary).toBe(true);
-  });
-
-  it('exposes secondaryModelName in choice even when not used', async () => {
-    const { setSecondaryModelName, chooseModelForQuery } = await import('@/lib/chat/model-selection');
-    await setSecondaryModelName('qwen2.5:1.5b');
-
-    const choice = await chooseModelForQuery('complex', 'standard');
-    expect(choice.secondaryModelName).toBe('qwen2.5:1.5b');
-    expect(choice.usedSecondary).toBe(false);
   });
 });

@@ -1,57 +1,34 @@
 import 'server-only';
 
 // ============================================================================
-// Auto model selection — pick smaller/faster model for trivial queries.
+// Auto model selection — secondary for trivial companion turns.
 // ============================================================================
 //
-// Problem: One model for everything. "Привет" and "проанализируй архитектуру
-// микросервиса" both go through the same 7B model — but trivial queries can
-// run on 1-3B (3-5× faster, less VRAM).
-//
-// Solution: Based on task complexity + configured secondary model, decide
-// which model to use for the main streamText call.
-//
 // Rules:
-//   - complexity === 'trivial'  → use secondary (small) model if available
-//   - complexity === 'simple'   → use primary (configured) model
-//   - complexity === 'moderate' → use primary
-//   - complexity === 'complex'  → use primary
-//   - complexity === 'research' → use primary
+//   - complexity === 'trivial'  → secondary (small) if available
+//   - otherwise                → primary (chat / day)
 //
-// Secondary model is configured via Setting 'ollama_secondary_model'. If not
-// set or not currently pulled, falls back to primary (no error).
+// Heavy escalate is **agent brain only** (plan / replan / loop execute).
+// Companion chat keeps day model for liveness (latency + voice) — see
+// docs/AGENT-MODEL.md and model-escalate.ts (mode: 'agent').
 //
-// Tier compatibility:
-//   - 'micro' tier (≤4B) — secondary would be even smaller, often unusable.
-//     Skip secondary for micro tier (always use primary).
-//   - 'standard' and up — secondary makes sense.
-//
-// Cost: 0 LLM calls. Decision is rule-based. The model swap happens in
-// pipeline.ts when calling getChatModel() — we pass the chosen model name.
+// Secondary unset → fall back to primary (no error).
+// Tier micro: skip secondary (primary already small).
 
-import { db } from '@/lib/db';
 import { logger } from '@/lib/logger';
-import { checkOllamaHealth, getOllamaSettings } from '@/lib/ollama';
+import { checkOllamaHealth, getOllamaSettings, setOllamaSettings } from '@/lib/ollama';
 import type { Tier } from '@/lib/capability-profile';
 import type { TaskComplexity } from '@/lib/task-complexity';
 
-const SECONDARY_MODEL_SETTING_KEY = 'ollama_secondary_model';
 const TIERS_OK_FOR_SECONDARY: Tier[] = ['standard', 'plus', 'max'];
 
 /**
  * Get the configured secondary (small) model name, if any.
- *
- * Returns null if:
- *   - Setting not set
- *   - Setting is empty string
- *   - DB unavailable (e.g. during build)
  */
 export async function getSecondaryModelName(): Promise<string | null> {
   try {
-    const row = await db.setting.findUnique({
-      where: { key: SECONDARY_MODEL_SETTING_KEY },
-    });
-    const val = row?.value?.trim();
+    const settings = await getOllamaSettings();
+    const val = settings.secondaryModel?.trim();
     return val || null;
   } catch {
     return null;
@@ -62,92 +39,93 @@ export async function getSecondaryModelName(): Promise<string | null> {
  * Set or clear the secondary model. Pass null to disable.
  */
 export async function setSecondaryModelName(model: string | null): Promise<void> {
-  if (model === null) {
-    await db.setting.delete({
-      where: { key: SECONDARY_MODEL_SETTING_KEY },
-    }).catch(() => null);  // ignore if not exists
-  } else {
-    await db.setting.upsert({
-      where: { key: SECONDARY_MODEL_SETTING_KEY },
-      create: { key: SECONDARY_MODEL_SETTING_KEY, value: model },
-      update: { value: model },
-    });
-  }
+  await setOllamaSettings({ secondaryModel: model ?? '' });
 }
 
 export interface ModelChoice {
   /** Final model name to pass to getChatModel() / streamText */
   modelName: string;
   /** Why this model was chosen — for logging/UI */
-  reason: 'trivial-use-secondary' | 'no-secondary-configured' | 'complexity-not-trivial' | 'tier-too-small' | 'secondary-not-pulled';
+  reason:
+    | 'trivial-use-secondary'
+    | 'no-secondary-configured'
+    | 'tier-too-small'
+    | 'secondary-not-pulled'
+    | 'primary';
   /** Whether the secondary model was used */
   usedSecondary: boolean;
+  /**
+   * Always false for companion chat — heavy is agent-only (brain/face split).
+   * Kept on the type so stream/pipeline code stays uniform.
+   */
+  usedHeavy: boolean;
   /** Configured secondary model name (may differ from chosen if not available) */
   secondaryModelName: string | null;
+  /** Configured heavy (null if unset) — informational; not used for chat stream */
+  heavyModelName: string | null;
+}
+
+function baseChoice(
+  modelName: string,
+  reason: ModelChoice['reason'],
+  extras: Partial<ModelChoice> = {},
+): ModelChoice {
+  return {
+    modelName,
+    reason,
+    usedSecondary: false,
+    usedHeavy: false,
+    secondaryModelName: extras.secondaryModelName ?? null,
+    heavyModelName: extras.heavyModelName ?? null,
+    ...extras,
+  };
 }
 
 /**
- * Decide which model to use for the main streamText call.
- *
- * @param complexity Task complexity from classifyTaskComplexity
- * @param tier Capability tier from capability-profile
- * @returns ModelChoice with final model name + reason
+ * Decide which model to use for the companion streamText call.
+ * Does not escalate to heavy — that path is agent brain only.
  */
 export async function chooseModelForQuery(
   complexity: TaskComplexity,
   tier: Tier,
 ): Promise<ModelChoice> {
   const settings = await getOllamaSettings();
-
-  // Only use secondary for 'trivial' complexity
-  if (complexity !== 'trivial') {
-    return {
-      modelName: settings.model,
-      reason: 'complexity-not-trivial',
-      usedSecondary: false,
-      secondaryModelName: await getSecondaryModelName(),
-    };
-  }
-
-  // Skip secondary for micro tier — primary is already small enough
-  if (!TIERS_OK_FOR_SECONDARY.includes(tier)) {
-    return {
-      modelName: settings.model,
-      reason: 'tier-too-small',
-      usedSecondary: false,
-      secondaryModelName: await getSecondaryModelName(),
-    };
-  }
-
   const secondary = await getSecondaryModelName();
-  if (!secondary) {
-    return {
-      modelName: settings.model,
-      reason: 'no-secondary-configured',
-      usedSecondary: false,
-      secondaryModelName: null,
-    };
-  }
+  const heavyName = settings.heavyModel?.trim() || null;
 
-  // Verify secondary model is actually pulled in Ollama
-  const health = await checkOllamaHealth({ timeoutMs: 5_000 });
-  if (!health.ok || !health.models.includes(secondary)) {
-    logger.warn('chat', 'Secondary model not available, falling back to primary', {
-      secondary,
-      available: health.models.length,
-    });
-    return {
-      modelName: settings.model,
-      reason: 'secondary-not-pulled',
-      usedSecondary: false,
+  if (complexity === 'trivial') {
+    if (!TIERS_OK_FOR_SECONDARY.includes(tier)) {
+      return baseChoice(settings.model, 'tier-too-small', {
+        secondaryModelName: secondary,
+        heavyModelName: heavyName,
+      });
+    }
+    if (!secondary) {
+      return baseChoice(settings.model, 'no-secondary-configured', {
+        secondaryModelName: null,
+        heavyModelName: heavyName,
+      });
+    }
+    const health = await checkOllamaHealth({ timeoutMs: 5_000 });
+    if (!health.ok || !health.models.includes(secondary)) {
+      logger.warn('chat', 'Secondary model not available, falling back to primary', {
+        secondary,
+        available: health.models.length,
+      });
+      return baseChoice(settings.model, 'secondary-not-pulled', {
+        secondaryModelName: secondary,
+        heavyModelName: heavyName,
+      });
+    }
+    return baseChoice(secondary, 'trivial-use-secondary', {
+      usedSecondary: true,
       secondaryModelName: secondary,
-    };
+      heavyModelName: heavyName,
+    });
   }
 
-  return {
-    modelName: secondary,
-    reason: 'trivial-use-secondary',
-    usedSecondary: true,
+  return baseChoice(settings.model, 'primary', {
     secondaryModelName: secondary,
-  };
+    heavyModelName: heavyName,
+  });
 }

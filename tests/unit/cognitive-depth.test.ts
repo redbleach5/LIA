@@ -24,7 +24,6 @@ describe('planExecution', () => {
     expect(p.selfCheck).toBe(false);
     expect(p.calls).toBe(1);
     expect(p.maxTokens).toBe(4096); // standard tierParams.maxTokens
-    expect(p.autoWebSearch).toBe(true);
     expect(shouldDeliberate(p)).toBe(false);
     expect(shouldSelfCheck(p)).toBe(false);
   });
@@ -50,14 +49,6 @@ describe('planExecution', () => {
       },
     );
 
-    it('research enables proactive web search flag in matrix', () => {
-      expect(plan('standard', 'research').autoWebSearch).toBe(true);
-    });
-
-    it('simple does not auto-enable web search in matrix', () => {
-      expect(plan('standard', 'simple').autoWebSearch).toBe(false);
-    });
-
     it('tools off on trivial/simple; on for moderate+', () => {
       expect(plan('standard', 'trivial').toolsEnabled).toBe(false);
       expect(plan('standard', 'simple').toolsEnabled).toBe(false);
@@ -78,10 +69,6 @@ describe('planExecution', () => {
       const p = plan('plus', 'trivial');
       expect(p.calls).toBe(1);
       expect(p.deliberate).toBe(false);
-    });
-
-    it('research enables autoWebSearch', () => {
-      expect(plan('plus', 'research').autoWebSearch).toBe(true);
     });
   });
 

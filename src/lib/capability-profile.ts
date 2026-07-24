@@ -44,6 +44,9 @@ export type CapabilityBudgetSnapshot = {
     estimatedVramGb: number;
     sharesChatWeights: boolean;
     resident: boolean;
+    /** Params/quant for pool-aware num_ctx when escalating to this role. */
+    parameterSizeB?: number;
+    quantization?: string | null;
   }>;
 };
 
@@ -65,6 +68,13 @@ export type CapabilityProfile = {
   agentModelSize?: number;
   /** Resolved agent model name (chat name when agent slot empty). */
   agentModelName?: string;
+  /**
+   * Configured heavy model (escalate). Null/absent when unset.
+   * Size/quant used for pool-aware num_ctx on heavy calls — not day/agent size.
+   */
+  heavyModelName?: string | null;
+  heavyModelSize?: number;
+  heavyQuantization?: string | null;
   quantization: string | null; // 'q4_K_M', 'f16', etc. — chat model
   vramGb: number;              // total VRAM available (0 if CPU-only / unknown)
   gpuCount: number;            // 0 if CPU-only
@@ -93,7 +103,7 @@ export type CapabilityProfile = {
 export type CognitiveParams = {
   // How many LLM calls for a standard message
   calls: 1 | 2 | 3 | 4;
-  // Whether to use deliberate step (analyze before respond)
+  // Whether to use deliberate step (analyze before respond) — permanently unused in chat
   deliberate: boolean;
   // Whether to run self-check (re-read answer, fix errors)
   selfCheck: boolean;
@@ -101,8 +111,6 @@ export type CognitiveParams = {
   maxTokens: number;
   // Whether tools are available
   toolsEnabled: boolean;
-  // Whether web_search is auto-triggered for factual questions
-  autoWebSearch: boolean;
   // Agent limits
   agentMaxSteps: number;
   agentMaxDurationSec: number;
@@ -416,12 +424,14 @@ async function readModelRoleNames(): Promise<{
   chat: string;
   agent: string;
   secondary: string | null;
+  heavy: string | null;
   embed: string;
 }> {
   let chat = process.env.OLLAMA_MODEL || '';
   let agent = process.env.OLLAMA_AGENT_MODEL || '';
   let embed = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
   let secondary: string | null = null;
+  let heavy: string | null = null;
 
   try {
     const rows = await db.setting.findMany({
@@ -432,6 +442,7 @@ async function readModelRoleNames(): Promise<{
             'ollama_agent_model',
             'ollama_embed_model',
             'ollama_secondary_model',
+            'ollama_heavy_model',
           ],
         },
       },
@@ -443,11 +454,19 @@ async function readModelRoleNames(): Promise<{
       else if (row.key === 'ollama_secondary_model') {
         const v = row.value?.trim();
         secondary = v || null;
+      } else if (row.key === 'ollama_heavy_model') {
+        const v = row.value?.trim();
+        heavy = v || null;
       }
     }
   } catch { /* ignore */ }
 
-  return { chat, agent, secondary, embed };
+  if (!heavy) {
+    const fromEnv = process.env.OLLAMA_HEAVY_MODEL?.trim();
+    if (fromEnv) heavy = fromEnv;
+  }
+
+  return { chat, agent, secondary, heavy, embed };
 }
 
 // ============================================================================
@@ -485,10 +504,11 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
   const agentName = agentSharesChat ? modelName : agentNameRaw;
   const embedName = roleNames.embed || 'nomic-embed-text';
   const secondaryName = roleNames.secondary;
+  const heavyName = roleNames.heavy;
 
   // Fetch details for each distinct model name (parallel)
   const namesToFetch = [...new Set(
-    [modelName, agentName, embedName, secondaryName].filter((n): n is string => !!n),
+    [modelName, agentName, embedName, secondaryName, heavyName].filter((n): n is string => !!n),
   )];
   const detailsEntries = await Promise.all(
     namesToFetch.map(async name => [name, await fetchModelDetails(name)] as const),
@@ -504,6 +524,11 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
   };
   const secondaryDetails = secondaryName
     ? (detailsByName.get(secondaryName) ?? {
+      parameterSize: 0, quantization: null, contextWindow: 0,
+    })
+    : null;
+  const heavyDetails = heavyName
+    ? (detailsByName.get(heavyName) ?? {
       parameterSize: 0, quantization: null, contextWindow: 0,
     })
     : null;
@@ -550,6 +575,12 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
         quantization: secondaryDetails?.quantization ?? null,
       },
       {
+        role: 'heavy',
+        modelName: heavyName,
+        parameterSizeB: heavyDetails?.parameterSize ?? 0,
+        quantization: heavyDetails?.quantization ?? null,
+      },
+      {
         role: 'embed',
         modelName: embedName,
         parameterSizeB: embedDetails.parameterSize,
@@ -562,6 +593,23 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
     chatDetails.parameterSize,
     chatDetails.quantization,
   );
+
+  // Observe-only: day + heavy both huge is a warning, never cuts budgets.
+  if (heavyName && heavyDetails && chatEstimatedVramGb > 0 && vramPoolKnown && vramGb > 0) {
+    const heavyEst = estimateModelVramGb(
+      heavyDetails.parameterSize,
+      heavyDetails.quantization,
+    );
+    if (heavyEst > 0 && chatEstimatedVramGb + heavyEst > vramGb * 0.95) {
+      logger.warn('system', 'Day + heavy models likely exceed VRAM pool (observe only)', {
+        chatEstimatedVramGb,
+        heavyEstimatedVramGb: heavyEst,
+        vramGb,
+        chat: modelName,
+        heavy: heavyName,
+      });
+    }
+  }
 
   const tierClassifyBase = {
     vramPoolGb: vramGb,
@@ -602,6 +650,8 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
       estimatedVramGb: r.estimatedVramGb,
       sharesChatWeights: r.sharesChatWeights,
       resident: r.resident,
+      parameterSizeB: r.parameterSizeB,
+      quantization: r.quantization,
     })),
   };
 
@@ -612,6 +662,9 @@ export async function detectProfile(): Promise<CapabilityProfile | null> {
     agentTier,
     agentModelSize: agentDetails.parameterSize,
     agentModelName: agentName,
+    heavyModelName: heavyName,
+    heavyModelSize: heavyDetails?.parameterSize ?? 0,
+    heavyQuantization: heavyDetails?.quantization ?? null,
     quantization: chatDetails.quantization,
     vramGb,
     gpuCount,
@@ -667,7 +720,6 @@ const TIER_PARAMS: Record<Tier, CognitiveParams> = {
     selfCheck: false,
     maxTokens: 2048,
     toolsEnabled: true,
-    autoWebSearch: true,    // 4B model needs web_search to compensate
     agentMaxSteps: 10,
     agentMaxDurationSec: 600,         // 10 min
   },
@@ -679,7 +731,6 @@ const TIER_PARAMS: Record<Tier, CognitiveParams> = {
     selfCheck: false, // streaming cannot revise; see shouldSelfCheck
     maxTokens: 4096,
     toolsEnabled: true,
-    autoWebSearch: true,
     agentMaxSteps: 25,
     agentMaxDurationSec: 3600,        // 1 hour
   },
@@ -689,7 +740,6 @@ const TIER_PARAMS: Record<Tier, CognitiveParams> = {
     selfCheck: false,
     maxTokens: 8192,
     toolsEnabled: true,
-    autoWebSearch: false,   // 30B+ model knows enough
     agentMaxSteps: 100,
     agentMaxDurationSec: 6 * 3600,    // 6 hours
   },
@@ -699,7 +749,6 @@ const TIER_PARAMS: Record<Tier, CognitiveParams> = {
     selfCheck: false,
     maxTokens: 16384,       // no practical limit
     toolsEnabled: true,
-    autoWebSearch: false,
     agentMaxSteps: 500,
     agentMaxDurationSec: 24 * 3600,   // 24 hours
   },

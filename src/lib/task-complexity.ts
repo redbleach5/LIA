@@ -124,7 +124,7 @@ export function isKbQuestion(message: string): boolean {
  * Нужен ли proactive web_search (RAG до LLM): только когда вопрос требует
  * информации вне весов модели и памяти эпизода.
  *
- * Не путать с plan.autoWebSearch (подсказка tier: слабым моделям полезен search)
+ * Не путать с устаревшим plan.autoWebSearch (удалён — web через needsProactiveWebSearch)
  * и plan.toolsEnabled (tools в streamText — модель может вызвать search сама).
  */
 export function needsProactiveWebSearch(message: string, complexity: TaskComplexity): boolean {

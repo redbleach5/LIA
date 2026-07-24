@@ -19,10 +19,24 @@ import { normalizeOllamaBaseUrl } from './ollama-base-url';
 
 /** Active Ollama num_ctx for /v1 chat completions (single-user; set per stream). */
 let activeOllamaNumCtx: number | undefined;
+/** Active keep_alive for Ollama options (e.g. heavy escalate → "0"). */
+let activeOllamaKeepAlive: string | number | undefined;
 
 /** Set explicit num_ctx injected into Ollama OpenAI-compatible requests. */
 export function setOllamaNumCtx(numCtx: number | undefined): void {
   activeOllamaNumCtx = numCtx;
+}
+
+/**
+ * Set keep_alive for subsequent Ollama chat completions.
+ * Heavy escalate uses short/"0" so day VRAM is not stolen indefinitely.
+ */
+export function setOllamaKeepAlive(keepAlive: string | number | undefined): void {
+  activeOllamaKeepAlive = keepAlive;
+}
+
+export function getOllamaKeepAlive(): string | number | undefined {
+  return activeOllamaKeepAlive;
 }
 
 // ============================================================================
@@ -34,11 +48,17 @@ const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'qwen3:8b';
 const DEFAULT_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 /** Optional stronger model for agent plan/execute/synthesize. Empty = same as chat. */
 const DEFAULT_AGENT_MODEL = process.env.OLLAMA_AGENT_MODEL || '';
+/** Optional heavy model for escalate. Empty = fall back to agent/chat. */
+const DEFAULT_HEAVY_MODEL = process.env.OLLAMA_HEAVY_MODEL || '';
 
 let currentBaseUrl = DEFAULT_BASE_URL;
 let currentModel = DEFAULT_MODEL;
 /** Empty string = agent uses the same model as chat. */
 let currentAgentModel = DEFAULT_AGENT_MODEL;
+/** Empty string = secondary unset (trivial path stays on chat). */
+let currentSecondaryModel = '';
+/** Empty string = heavy unset (escalate no-ops). */
+let currentHeavyModel = DEFAULT_HEAVY_MODEL;
 let currentEmbedModel = DEFAULT_EMBED_MODEL;
 let settingsLoaded = false;
 let settingsLoadedAt = 0;
@@ -60,6 +80,8 @@ async function loadSettings(): Promise<void> {
       let nextBaseUrl = DEFAULT_BASE_URL;
       let nextModel = DEFAULT_MODEL;
       let nextAgentModel = DEFAULT_AGENT_MODEL;
+      let nextSecondaryModel = '';
+      let nextHeavyModel = DEFAULT_HEAVY_MODEL;
       // Absent embed key = auto (not DEFAULT_EMBED_MODEL) — matches UI "Авто".
       let nextEmbedModel = '';
 
@@ -70,6 +92,10 @@ async function loadSettings(): Promise<void> {
           nextModel = row.value;
         } else if (row.key === 'ollama_agent_model') {
           nextAgentModel = row.value;
+        } else if (row.key === 'ollama_secondary_model') {
+          nextSecondaryModel = row.value;
+        } else if (row.key === 'ollama_heavy_model') {
+          nextHeavyModel = row.value;
         } else if (row.key === 'ollama_embed_model' && row.value) {
           nextEmbedModel = row.value;
         }
@@ -79,11 +105,15 @@ async function loadSettings(): Promise<void> {
         nextBaseUrl !== currentBaseUrl
         || nextModel !== currentModel
         || nextAgentModel !== currentAgentModel
+        || nextSecondaryModel !== currentSecondaryModel
+        || nextHeavyModel !== currentHeavyModel
         || nextEmbedModel !== currentEmbedModel;
 
       currentBaseUrl = nextBaseUrl;
       currentModel = nextModel;
       currentAgentModel = nextAgentModel;
+      currentSecondaryModel = nextSecondaryModel;
+      currentHeavyModel = nextHeavyModel;
       currentEmbedModel = nextEmbedModel;
 
       settingsLoaded = true;
@@ -93,6 +123,8 @@ async function loadSettings(): Promise<void> {
           baseUrl: currentBaseUrl,
           model: currentModel,
           agentModel: currentAgentModel || '(same as chat)',
+          secondaryModel: currentSecondaryModel || '(none)',
+          heavyModel: currentHeavyModel || '(none)',
           embedModel: currentEmbedModel || 'auto',
         });
       }
@@ -133,6 +165,8 @@ export async function ensureOllamaEnvDbReconciled(): Promise<void> {
     baseUrl: currentBaseUrl,
     model: currentModel,
     agentModel: currentAgentModel,
+    secondaryModel: currentSecondaryModel,
+    heavyModel: currentHeavyModel,
     embedModel: currentEmbedModel,
   });
 }
@@ -145,6 +179,13 @@ export async function getOllamaSettings() {
     /** Configured agent model; empty string means “same as chat”. */
     agentModel: currentAgentModel,
     agentModelEffective: resolveAgentModelName(currentModel, currentAgentModel),
+    /** Configured secondary; empty = unset. */
+    secondaryModel: currentSecondaryModel,
+    /** Configured heavy; empty = unset (escalate no-ops). */
+    heavyModel: currentHeavyModel,
+    /** Effective heavy: configured or agent/chat fallback. */
+    heavyModelEffective: currentHeavyModel.trim()
+      || resolveAgentModelName(currentModel, currentAgentModel),
     embedModel: currentEmbedModel || 'auto',
   };
 }
@@ -154,6 +195,10 @@ export async function setOllamaSettings(params: {
   model?: string;
   /** Empty string clears override (agent follows chat model). */
   agentModel?: string;
+  /** Empty string clears secondary. */
+  secondaryModel?: string;
+  /** Empty string clears heavy (escalate no-ops). */
+  heavyModel?: string;
   embedModel?: string;
 }) {
   settingsLoaded = true;
@@ -190,6 +235,30 @@ export async function setOllamaSettings(params: {
       });
     }
   }
+  if (params.secondaryModel !== undefined) {
+    currentSecondaryModel = params.secondaryModel.trim();
+    if (currentSecondaryModel === '') {
+      await db.setting.deleteMany({ where: { key: 'ollama_secondary_model' } });
+    } else {
+      await db.setting.upsert({
+        where: { key: 'ollama_secondary_model' },
+        create: { key: 'ollama_secondary_model', value: currentSecondaryModel },
+        update: { value: currentSecondaryModel },
+      });
+    }
+  }
+  if (params.heavyModel !== undefined) {
+    currentHeavyModel = params.heavyModel.trim();
+    if (currentHeavyModel === '') {
+      await db.setting.deleteMany({ where: { key: 'ollama_heavy_model' } });
+    } else {
+      await db.setting.upsert({
+        where: { key: 'ollama_heavy_model' },
+        create: { key: 'ollama_heavy_model', value: currentHeavyModel },
+        update: { value: currentHeavyModel },
+      });
+    }
+  }
   if (params.embedModel !== undefined) {
     currentEmbedModel = params.embedModel;
     if (params.embedModel === '') {
@@ -207,6 +276,8 @@ export async function setOllamaSettings(params: {
     baseUrl: currentBaseUrl,
     model: currentModel,
     agentModel: currentAgentModel,
+    secondaryModel: currentSecondaryModel,
+    heavyModel: currentHeavyModel,
     embedModel: currentEmbedModel,
   });
 }
@@ -226,11 +297,16 @@ async function getOllamaProvider() {
     baseURL: `${currentBaseUrl}/v1`,
     apiKey: 'ollama',
     fetch: async (input, init) => {
-      if (activeOllamaNumCtx && init?.body && typeof init.body === 'string') {
+      if ((activeOllamaNumCtx || activeOllamaKeepAlive !== undefined) && init?.body && typeof init.body === 'string') {
         try {
           const body = JSON.parse(init.body) as Record<string, unknown>;
           const prev = (body.options as Record<string, unknown> | undefined) ?? {};
-          body.options = { ...prev, num_ctx: activeOllamaNumCtx };
+          const nextOpts: Record<string, unknown> = { ...prev };
+          if (activeOllamaNumCtx) nextOpts.num_ctx = activeOllamaNumCtx;
+          body.options = nextOpts;
+          if (activeOllamaKeepAlive !== undefined) {
+            body.keep_alive = activeOllamaKeepAlive;
+          }
           init = { ...init, body: JSON.stringify(body) };
         } catch {
           // leave body unchanged
@@ -335,6 +411,27 @@ export async function getAgentModelName(): Promise<string> {
 }
 
 /**
+ * Configured heavy model name, or null when unset (escalate should no-op).
+ * Does not fall back to agent/chat — use getHeavyModelNameEffective for that.
+ */
+export async function getHeavyModelName(): Promise<string | null> {
+  await loadSettings();
+  const h = currentHeavyModel.trim();
+  return h || null;
+}
+
+/**
+ * Heavy if configured; otherwise agent/chat fallback.
+ * Empty heavy ⇒ same as agent (documented for escalate callers).
+ */
+export async function getHeavyModelNameEffective(): Promise<string> {
+  await loadSettings();
+  const h = currentHeavyModel.trim();
+  if (h) return h;
+  return resolveAgentModelName(currentModel, currentAgentModel);
+}
+
+/**
  * Model object for agent plan/execute/synthesize.
  * When an agent model is configured, uses that Ollama name; otherwise follows getChatModel().
  */
@@ -345,6 +442,12 @@ export async function getAgentModel() {
     return getChatModel();
   }
   return getChatModel(configured);
+}
+
+/** Model object for heavy escalate; falls back to agent/chat when heavy unset. */
+export async function getHeavyModel() {
+  const name = await getHeavyModelNameEffective();
+  return getChatModel(name);
 }
 
 // ============================================================================

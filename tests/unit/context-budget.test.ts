@@ -15,12 +15,14 @@ import { describe, it, expect } from 'vitest';
 import {
   estimateTokens,
   resolveContextWindow,
+  resolveInferenceNumCtx,
   computeDialogueBudget,
   applyDialogueBudget,
   isDialogueBudgetPressured,
   MAX_MESSAGES_TO_CONSIDER,
   type BudgetMessage,
 } from '@/lib/chat/context-budget';
+import { resolvePoolAwareCtxCap } from '@/lib/compute-budget';
 
 // ============================================================================
 // estimateTokens
@@ -70,6 +72,74 @@ describe('resolveContextWindow', () => {
 
   it('falls back when contextWindow is negative (defensive)', () => {
     expect(resolveContextWindow(-1, 'standard')).toBe(8192);
+  });
+});
+
+// ============================================================================
+// Pool-aware num_ctx
+// ============================================================================
+
+describe('resolveInferenceNumCtx (pool-aware)', () => {
+  const model = {
+    parameterSizeB: 14,
+    quantization: 'Q4_K_M',
+  };
+
+  it('without pool opts matches tier-only resolveContextWindow', () => {
+    expect(resolveInferenceNumCtx(40000, 'plus')).toBe(resolveContextWindow(40000, 'plus'));
+  });
+
+  it('shrinks ctx when VRAM pool shrinks (same model)', () => {
+    const shared = { ...model, vramPoolKnown: true as const, role: 'day' as const };
+    const ctx48 = resolveInferenceNumCtx(65536, 'plus', { ...shared, vramPoolGb: 48 });
+    const ctx16 = resolveInferenceNumCtx(65536, 'plus', { ...shared, vramPoolGb: 16 });
+    const ctx8 = resolveInferenceNumCtx(65536, 'plus', { ...shared, vramPoolGb: 8 });
+    expect(ctx48).toBeGreaterThanOrEqual(ctx16);
+    expect(ctx16).toBeGreaterThan(ctx8);
+  });
+
+  it('heavy role allows higher ctx than day on tight pool', () => {
+    const base = {
+      ...model,
+      vramPoolGb: 16,
+      vramPoolKnown: true as const,
+    };
+    const day = resolveInferenceNumCtx(65536, 'plus', { ...base, role: 'day' });
+    const heavy = resolveInferenceNumCtx(65536, 'plus', { ...base, role: 'heavy' });
+    expect(heavy).toBeGreaterThanOrEqual(day);
+  });
+
+  it('unknown pool does not invent a cap below tier', () => {
+    expect(
+      resolveInferenceNumCtx(32768, 'plus', {
+        vramPoolGb: 0,
+        vramPoolKnown: false,
+        parameterSizeB: 14,
+        quantization: 'Q4_K_M',
+      }),
+    ).toBe(32768);
+  });
+});
+
+describe('resolvePoolAwareCtxCap', () => {
+  it('returns null when pool unknown', () => {
+    expect(resolvePoolAwareCtxCap({
+      vramPoolGb: 16,
+      vramPoolKnown: false,
+      parameterSizeB: 14,
+    })).toBeNull();
+  });
+
+  it('returns floor when weights exceed day budget', () => {
+    const cap = resolvePoolAwareCtxCap({
+      vramPoolGb: 8,
+      vramPoolKnown: true,
+      parameterSizeB: 32,
+      quantization: 'Q4_K_M',
+      role: 'day',
+      minCtx: 2048,
+    });
+    expect(cap).toBe(2048);
   });
 });
 

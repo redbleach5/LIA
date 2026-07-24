@@ -31,6 +31,7 @@ import { isKbQuestion, needsProactiveWebSearch, type TaskComplexity } from '@/li
 import type { CognitiveMode } from '@/lib/cognitive-depth';
 import type { ExecutionPlan } from '@/lib/cognitive-depth';
 import type { Tier } from '@/lib/capability-profile';
+import { poolOptsFromProfile } from '@/lib/chat/inference-ctx';
 import {
   buildChatContext,
   runProactiveWebSearch,
@@ -52,7 +53,8 @@ import {
   resolveAcquaintanceContext,
   type TrivialMessageFlags,
 } from '@/lib/chat/message-heuristics';
-import { getUserNameFromFacts } from '@/lib/memory/facts';
+import { deriveDialogueTurnContractFromFlags } from '@/lib/chat/dialogue-turn-contract';
+import { resolveSpeakerForTurn } from '@/lib/memory/person-binding';
 
 /** Companion emotionJson window for decay baseline (not full dialogue history). */
 const EMOTION_HISTORY_WINDOW = 12;
@@ -316,14 +318,6 @@ export async function buildChatPromptBundle(params: {
   const { getWorkspaceMemoryForPrompt } = await import('@/lib/agent/workspace-memory');
   const workspaceMemory = (await getWorkspaceMemoryForPrompt(workspaceBinding)) || undefined;
 
-  const recentLiaMessages = recentMessages
-    .filter(m => m.role === 'companion')
-    .slice(-4)
-    .map(m => m.content.slice(0, 120));
-  const recentLiaStr = recentLiaMessages.length > 0
-    ? recentLiaMessages.map((m, i) => `${i + 1}. ${m}`).join('\n')
-    : undefined;
-
   // Pre-search independent of streamText tool schemas (tools off on light turns).
   const shouldPreSearch = needsProactiveWebSearch(text, complexity);
   const [webSearchContext, kbResult] = await Promise.all([
@@ -358,16 +352,30 @@ export async function buildChatPromptBundle(params: {
     complexity,
   });
 
-  const userNameKnown = !!getUserNameFromFacts(globalFacts);
+  const speaker = await resolveSpeakerForTurn({ episodeId, userText: text });
+  const nonUserGlobal = globalFacts.filter((f) => !f.key.startsWith('user.'));
+  const liaGlobalBlock = formatGlobalFactsForPrompt(nonUserGlobal);
+  const userProfile = [speaker.userProfile, liaGlobalBlock]
+    .filter((s) => s && s.trim().length > 0)
+    .join('\n\n') || undefined;
+
   const { episodeUserTurnCount, episodeHasPriorGreeting: priorGreeting } =
     resolveAcquaintanceContext({
       recentMessages,
       storedMessageCountBeforeTurn: storedMessageCount,
     });
 
+  const dialogueContract = deriveDialogueTurnContractFromFlags(trivialFlags, {
+    userNameKnown: speaker.userNameKnown,
+    episodeUserTurnCount,
+    episodeHasPriorGreeting: priorGreeting,
+    needIdentifySpeaker: speaker.needIdentifySpeaker,
+    knownPeopleNames: speaker.knownPeopleNames,
+  });
+
   const promptFootprint = buildSystemPromptFootprint({
     emotion: perceivedEmotion,
-    userProfile: formatGlobalFactsForPrompt(globalFacts) || undefined,
+    userProfile,
     workspaceContext,
     workspaceMemory,
     episodeFacts: formatEpisodeFactsForPrompt(episodeFacts) || undefined,
@@ -387,7 +395,6 @@ export async function buildChatPromptBundle(params: {
         return undefined;
       }
     })(),
-    recentLiaMessages: recentLiaStr,
     mode: userMode,
     tier,
     complexity,
@@ -401,10 +408,11 @@ export async function buildChatPromptBundle(params: {
     isTrivialGreeting: trivialFlags.isTrivialGreeting,
     isTrivialHowAreYou: trivialFlags.isTrivialHowAreYou,
     isKbQuestion: isKbQuestion(text),
-    userNameKnown,
+    userNameKnown: speaker.userNameKnown,
     isAcquaintanceRequest: trivialFlags.isAcquaintanceRequest,
     episodeUserTurnCount,
     episodeHasPriorGreeting: priorGreeting,
+    dialogueContract,
   });
   const systemPrompt = promptFootprint.prompt;
   log.debug('chat', 'System prompt footprint', {
@@ -416,6 +424,11 @@ export async function buildChatPromptBundle(params: {
     tier,
     complexity,
     toolsEnabled: toolsEnabledForPrompt,
+    dialoguePhase: dialogueContract.phase,
+    mayGreet: dialogueContract.mayGreet,
+    turnKind: dialogueContract.turnKind,
+    personId: speaker.personId?.slice(0, 8),
+    needIdentifySpeaker: speaker.needIdentifySpeaker,
   });
 
   const allDialogueMessages: BudgetMessage[] = recentMessages
@@ -432,6 +445,7 @@ export async function buildChatPromptBundle(params: {
       systemPrompt,
       maxOutputTokens: plan.maxTokens,
       toolsEnabled: plan.toolsEnabled,
+      pool: poolOptsFromProfile(profile),
     },
     allDialogueMessages,
   );

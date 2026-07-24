@@ -11,6 +11,8 @@ const DB_KEYS = {
   baseUrl: 'ollama_base_url',
   model: 'ollama_model',
   agentModel: 'ollama_agent_model',
+  secondaryModel: 'ollama_secondary_model',
+  heavyModel: 'ollama_heavy_model',
   embedModel: 'ollama_embed_model',
 } as const;
 
@@ -18,6 +20,8 @@ export type OllamaEnvSnapshot = {
   baseUrl: string;
   model: string;
   agentModel: string;
+  secondaryModel?: string;
+  heavyModel?: string;
   embedModel: string;
 };
 
@@ -29,6 +33,18 @@ export function applyOllamaToProcessEnv(snapshot: OllamaEnvSnapshot): void {
     process.env.OLLAMA_AGENT_MODEL = snapshot.agentModel.trim();
   } else {
     delete process.env.OLLAMA_AGENT_MODEL;
+  }
+  const secondary = (snapshot.secondaryModel ?? '').trim();
+  if (secondary) {
+    process.env.OLLAMA_SECONDARY_MODEL = secondary;
+  } else {
+    delete process.env.OLLAMA_SECONDARY_MODEL;
+  }
+  const heavy = (snapshot.heavyModel ?? '').trim();
+  if (heavy) {
+    process.env.OLLAMA_HEAVY_MODEL = heavy;
+  } else {
+    delete process.env.OLLAMA_HEAVY_MODEL;
   }
   if (snapshot.embedModel.trim()) {
     process.env.OLLAMA_EMBED_MODEL = snapshot.embedModel.trim();
@@ -63,6 +79,28 @@ async function seedDbFromSnapshot(snapshot: OllamaEnvSnapshot): Promise<void> {
     });
   } else {
     await db.setting.deleteMany({ where: { key: DB_KEYS.agentModel } });
+  }
+
+  const secondary = (snapshot.secondaryModel ?? '').trim();
+  if (secondary) {
+    await db.setting.upsert({
+      where: { key: DB_KEYS.secondaryModel },
+      create: { key: DB_KEYS.secondaryModel, value: secondary },
+      update: { value: secondary },
+    });
+  } else {
+    await db.setting.deleteMany({ where: { key: DB_KEYS.secondaryModel } });
+  }
+
+  const heavy = (snapshot.heavyModel ?? '').trim();
+  if (heavy) {
+    await db.setting.upsert({
+      where: { key: DB_KEYS.heavyModel },
+      create: { key: DB_KEYS.heavyModel, value: heavy },
+      update: { value: heavy },
+    });
+  } else {
+    await db.setting.deleteMany({ where: { key: DB_KEYS.heavyModel } });
   }
 
   const embed = snapshot.embedModel.trim();

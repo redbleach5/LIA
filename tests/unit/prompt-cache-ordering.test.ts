@@ -127,17 +127,18 @@ describe('prompt prefix-cache ordering', () => {
     expect(profileIdx).toBeLessThan(webIdx);
   });
 
-  it('places episode summary before recent Lia messages', () => {
+  it('places episode summary before dialogue turn contract', () => {
     const ctx = makeCtx({
       episodeSummary: 'EPISODE_SUMMARY_MARKER',
-      recentLiaMessages: 'RECENT_LIA_MESSAGES_MARKER',
+      episodeHasPriorGreeting: true,
+      episodeUserTurnCount: 3,
     });
     const prompt = buildSystemPrompt(ctx);
     const summaryIdx = prompt.indexOf('EPISODE_SUMMARY_MARKER');
-    const recentIdx = prompt.indexOf('RECENT_LIA_MESSAGES_MARKER');
+    const stateIdx = prompt.indexOf('СОСТОЯНИЕ ДИАЛОГА');
     expect(summaryIdx).toBeGreaterThan(0);
-    expect(recentIdx).toBeGreaterThan(0);
-    expect(summaryIdx).toBeLessThan(recentIdx);
+    expect(stateIdx).toBeGreaterThan(0);
+    expect(summaryIdx).toBeLessThan(stateIdx);
   });
 
   it('keeps character summary at the very start of the prompt', () => {
@@ -163,6 +164,7 @@ describe('prompt prefix-cache ordering', () => {
 
   it('does not lose core sections when all are provided', () => {
     // Emotional anchors are stored but not injected (prompt theater removed).
+    // recentLiaMessages is deprecated and ignored (toxic few-shot).
     const ctx = makeCtx({
       promptMode: 'full',
       userProfile: 'USER_PROFILE_MARKER',
@@ -190,7 +192,8 @@ describe('prompt prefix-cache ordering', () => {
     expect(prompt).not.toContain('painful_anchor:');
     expect(prompt).toContain('OPEN_TASKS_MARKER');
     expect(prompt).toContain('RAG_HITS_MARKER');
-    expect(prompt).toContain('RECENT_LIA_MESSAGES_MARKER');
+    expect(prompt).not.toContain('RECENT_LIA_MESSAGES_MARKER');
+    expect(prompt).toContain('СОСТОЯНИЕ ДИАЛОГА');
     expect(prompt).toContain('WEB_SEARCH_MARKER');
     expect(prompt).toContain('KB_SEARCH_MARKER');
     expect(prompt).toContain('Ты решила как ответить');
@@ -216,7 +219,7 @@ describe('regression: prior prompt structure preserved', () => {
       emotionalAnchors: 'x'.repeat(100),
       openTasks: 'x'.repeat(100),
       ragHits: 'x'.repeat(100),
-      recentLiaMessages: 'x'.repeat(100),
+      webSearchContext: 'x'.repeat(100),
     })).length;
     expect(full).toBeGreaterThan(base + 500);
   });

@@ -16,7 +16,14 @@ import type { Tier } from '@/lib/capability-profile';
 // ============================================================================
 
 /** Explicit model slots Lia may keep warm. */
-export type ModelRole = 'chat' | 'agent' | 'secondary' | 'embed';
+export type ModelRole = 'chat' | 'agent' | 'secondary' | 'heavy' | 'embed';
+
+/**
+ * Inference ctx residency policy.
+ * - day: prefer full-GPU (weights+KV fit pool); shrink ctx before spilling.
+ * - heavy: allow mild spill budget (higher effective pool) for hard tasks.
+ */
+export type InferenceCtxRole = 'day' | 'heavy';
 
 export type RoleModelInput = {
   role: ModelRole;
@@ -103,6 +110,59 @@ export function estimateEmbedVramGbFallback(modelName: string | null): number {
   return 0.5;
 }
 
+/**
+ * Rough GB of KV cache growth per 1k context tokens.
+ * Calibrated from mid-size Q4 residency (~0.01 GB/1k per billion params).
+ * Not a profiler — used only to cap num_ctx against the VRAM pool.
+ */
+export function estimateKvGbPer1kTokens(parameterSizeB: number): number {
+  if (parameterSizeB <= 0) return 0.1;
+  return Math.max(0.04, parameterSizeB * 0.01);
+}
+
+/**
+ * Max context tokens that fit the VRAM pool given model weights + headroom.
+ *
+ * Prefers full-GPU residency for `day`. `heavy` uses a larger effective budget
+ * (mild hybrid spill). Returns null when pool/size unknown — caller keeps
+ * tier-only cap. Floor is intentional (usable chat); never hardcodes a host SKU.
+ *
+ * `LIA_INFERENCE_RAM_GB` is reserved for a later hybrid term — not applied here.
+ */
+export function resolvePoolAwareCtxCap(params: {
+  vramPoolGb: number;
+  vramPoolKnown: boolean;
+  parameterSizeB: number;
+  quantization?: string | null;
+  role?: InferenceCtxRole;
+  /** Embed / other resident reserve (GB). */
+  embedReserveGb?: number;
+  /** Absolute floor (tokens). */
+  minCtx?: number;
+}): number | null {
+  if (!params.vramPoolKnown || params.vramPoolGb <= 0 || params.parameterSizeB <= 0) {
+    return null;
+  }
+
+  const role = params.role ?? 'day';
+  const weightsGb = estimateModelVramGb(params.parameterSizeB, params.quantization ?? null);
+  const embedReserveGb = params.embedReserveGb ?? 0.5;
+  // Day: ~92% of pool for model+KV. Heavy: allow ~115% effective (spill into RAM).
+  const poolFactor = role === 'heavy' ? 1.15 : 0.92;
+  const targetBudgetGb = params.vramPoolGb * poolFactor - embedReserveGb;
+  const availableKvGb = targetBudgetGb - weightsGb;
+  if (availableKvGb <= 0) {
+    return params.minCtx ?? 2048;
+  }
+
+  const kvPer1k = estimateKvGbPer1kTokens(params.parameterSizeB);
+  const raw = Math.floor((availableKvGb / kvPer1k) * 1000);
+  // Quantize to 1024-token steps for stable Ollama KV.
+  const stepped = Math.floor(raw / 1024) * 1024;
+  const minCtx = params.minCtx ?? 2048;
+  return Math.max(minCtx, stepped);
+}
+
 // ============================================================================
 // Resolve budget from role inputs
 // ============================================================================
@@ -114,8 +174,8 @@ export function estimateEmbedVramGbFallback(modelName: string | null): number {
  *   - chat (always, if named)
  *   - agent when distinct from chat
  *   - embed (warmup / memory path)
- * Secondary is listed but NOT counted as resident — it swaps in for trivial
- * turns and is typically smaller than chat.
+ * Secondary / heavy are listed but NOT counted as resident peak — they swap in
+ * for trivial / escalate turns and are typically not co-resident with day.
  */
 export function resolveComputeBudget(params: {
   vramPoolGb: number;
@@ -142,7 +202,7 @@ export function resolveComputeBudget(params: {
       estimated = estimateEmbedVramGbFallback(name);
     }
 
-    // Secondary: never resident peak; agent sharing chat: not extra copy
+    // Secondary/heavy: never resident peak; agent sharing chat: not extra copy
     let resident = false;
     if (r.role === 'chat' && name) resident = true;
     if (r.role === 'agent' && name && !shares) resident = true;

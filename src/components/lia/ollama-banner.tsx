@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useChatStore } from '@/stores/chat-store';
 import { AlertCircle, RefreshCw, Settings } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -38,10 +39,6 @@ export function OllamaBanner() {
     dispatchLiaAppEvent(LIA_APP_EVENTS.settingsChanged);
   };
 
-  const openSettings = () => {
-    dispatchLiaAppEvent(LIA_APP_EVENTS.openSettings);
-  };
-
   return (
     <div
       className="bg-warning/10 border-b border-warning/30 px-4 py-2 flex flex-wrap items-center gap-3 text-sm"
@@ -58,14 +55,13 @@ export function OllamaBanner() {
           <span className="block mt-1 text-xs text-text-dim font-mono">{error}</span>
         )}
       </span>
-      <button
-        type="button"
-        onClick={openSettings}
+      <Link
+        href="/settings/model"
         className="text-xs text-accent hover:text-accent/80 transition-colors px-2 py-1 rounded hover:bg-surface-2 flex items-center gap-1"
       >
         <Settings className="w-3 h-3" />
         Настройки
-      </button>
+      </Link>
       <button
         type="button"
         onClick={handleRetry}

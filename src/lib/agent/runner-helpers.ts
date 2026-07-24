@@ -31,9 +31,21 @@ import 'server-only';
 
 import { streamText, isStepCount, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { getAgentModel, getAgentModelName } from '@/lib/ollama';
+import {
+  getAgentModel,
+  getAgentModelName,
+  getChatModel,
+  getHeavyModelName,
+  getModelName,
+  setOllamaNumCtx,
+  setOllamaKeepAlive,
+} from '@/lib/ollama';
+import { applyOllamaNumCtxForRole } from '@/lib/chat/inference-ctx';
+import { decideModelEscalate } from '@/lib/llm/model-escalate';
 import { summarizeLlmError as extractErrorSummary } from '@/lib/llm/error-summary';
 import { logger } from '@/lib/logger';
+import type { TaskComplexity } from '@/lib/task-complexity';
+import { classifyTaskComplexity } from '@/lib/task-complexity';
 import { updateAgentTask, type AgentTask } from './task';
 import { persistAgentResultToChat, emitTaskFailedToChat } from './persist-to-chat';
 import { emitAgentEvent, signalCancellation, cancelWaiting } from './events';
@@ -84,6 +96,83 @@ import {
   resolveCreatePresetId,
 } from './runtime/presets';
 
+/** Map agent plan complexity band → TaskComplexity for escalate policy. */
+function agentPlanComplexityToTask(c: 'low' | 'medium' | 'high' | undefined): TaskComplexity {
+  if (c === 'high') return 'complex';
+  if (c === 'medium') return 'moderate';
+  return 'simple';
+}
+
+/**
+ * Resolve model for an agent LLM phase.
+ * Prefer: plan/replan → heavy when escalate; execute → agent (heavy after loops);
+ * synthesize → day/chat when heavy configured (Lia face).
+ */
+async function resolveAgentPhaseModel(params: {
+  phase: 'plan' | 'execute' | 'synthesize' | 'replan';
+  goal: string;
+  planComplexity?: 'low' | 'medium' | 'high';
+  loopCount?: number;
+  loopDetected?: boolean;
+  weakPlan?: boolean;
+}): Promise<{ model: Awaited<ReturnType<typeof getAgentModel>>; modelName: string; usedHeavy: boolean; reason: string }> {
+  const heavyName = await getHeavyModelName();
+  const heavyConfigured = Boolean(heavyName);
+  const complexity = params.planComplexity
+    ? agentPlanComplexityToTask(params.planComplexity)
+    : classifyTaskComplexity(params.goal);
+
+  const decision = decideModelEscalate({
+    complexity,
+    mode: 'agent',
+    phase: params.phase,
+    heavyConfigured,
+    signals: {
+      loopCount: params.loopCount,
+      loopDetected: params.loopDetected,
+      weakPlan: params.weakPlan,
+    },
+  });
+
+  // Synthesize: day/chat voice when heavy is configured (Lia face after brain).
+  // When heavy unset → keep agent model (pre-M3).
+  if (params.phase === 'synthesize') {
+    if (heavyConfigured) {
+      const model = await getChatModel();
+      return {
+        model,
+        modelName: await getModelName(),
+        usedHeavy: false,
+        reason: 'synthesize-day-voice',
+      };
+    }
+    const model = await getAgentModel();
+    return {
+      model,
+      modelName: await getAgentModelName(),
+      usedHeavy: false,
+      reason: 'synthesize-agent',
+    };
+  }
+
+  if (decision.role === 'heavy' && heavyName) {
+    logger.info('agent', 'Escalate to heavy', {
+      phase: params.phase,
+      heavy: heavyName,
+      reason: decision.reason,
+    });
+    const model = await getChatModel(heavyName);
+    return { model, modelName: heavyName, usedHeavy: true, reason: decision.reason };
+  }
+
+  const model = await getAgentModel();
+  return {
+    model,
+    modelName: await getAgentModelName(),
+    usedHeavy: false,
+    reason: decision.reason,
+  };
+}
 /** Create / fix living artifacts that need Process Supervisor before ГОТОВО. */
 export function goalRequiresRuntimeVerify(goal: string): boolean {
   if (!isCodeCreationGoal(goal) && !shouldReuseRecentEpisodeSandbox(goal)) return false;
@@ -754,7 +843,66 @@ export async function generatePlan(
   toolDescriptions: string,
   taskSignal: AbortSignal,
 ): Promise<AgentPlan> {
-  const model = await getAgentModel();
+  try {
+    const first = await generatePlanInner(task, toolDescriptions, taskSignal, {
+      phase: 'plan',
+      weakPlan: false,
+    });
+    if (!first.usedFallback) return first.plan;
+
+    // Degenerate / parse failure → one replan on heavy when configured and not
+    // already on heavy (wires decideModelEscalate weakPlan signal).
+    const heavy = await getHeavyModelName();
+    if (!heavy || first.usedHeavy) {
+      return first.plan;
+    }
+    logger.info('agent', 'Weak plan — replan on heavy', {
+      fallbackReason: first.fallbackReason,
+      heavy,
+    });
+    const second = await generatePlanInner(task, toolDescriptions, taskSignal, {
+      phase: 'replan',
+      weakPlan: true,
+    });
+    return second.plan;
+  } finally {
+    setOllamaNumCtx(undefined);
+    setOllamaKeepAlive(undefined);
+  }
+}
+
+type PlanAttempt = {
+  plan: AgentPlan;
+  usedFallback: boolean;
+  usedHeavy: boolean;
+  fallbackReason?: string;
+};
+
+async function generatePlanInner(
+  task: AgentTask,
+  toolDescriptions: string,
+  taskSignal: AbortSignal,
+  opts: { phase: 'plan' | 'replan'; weakPlan: boolean },
+): Promise<PlanAttempt> {
+  const phaseModel = await resolveAgentPhaseModel({
+    phase: opts.phase,
+    goal: task.goal,
+    weakPlan: opts.weakPlan,
+  });
+  // num_ctx from **heavy weights** when escalating — not day/agent size.
+  if (phaseModel.usedHeavy) {
+    setOllamaKeepAlive('0');
+    await applyOllamaNumCtxForRole('agent', 'heavy');
+  } else {
+    await applyOllamaNumCtxForRole('agent', 'day');
+  }
+  const model = phaseModel.model;
+  const fb = (reason: string): PlanAttempt => ({
+    plan: fallbackPlan(task),
+    usedFallback: true,
+    usedHeavy: phaseModel.usedHeavy,
+    fallbackReason: reason,
+  });
 
   const fsHint = describeFsScopeForPrompt(task.fsScope, task.goal);
   const sandboxReuse = isSandboxFsScope(task.fsScope) && shouldReuseRecentEpisodeSandbox(task.goal);
@@ -863,14 +1011,14 @@ export async function generatePlan(
       logger.warn('agent', 'Plan: no JSON found in response, using fallback', {
         preview: text.slice(0, 200),
       });
-      return fallbackPlan(task);
+      return fb('no-json');
     }
     const validated = planSchema.safeParse(parsed);
     if (!validated.success) {
       logger.warn('agent', 'Plan: schema validation failed, using fallback', {
         errors: validated.error.issues.map(i => `${i.path.join('.')}: ${i.message}`),
       });
-      return fallbackPlan(task);
+      return fb('schema');
     }
 
     // ── Sanity check: empty / placeholder plan is degenerate (weak models) ──
@@ -884,7 +1032,7 @@ export async function generatePlan(
         goal: task.goal.slice(0, 80),
         rawSteps: steps.slice(0, 3),
       });
-      return fallbackPlan(task);
+      return fb('empty-steps');
     }
 
     // ── Sanity check: detect degenerate plans ──
@@ -902,7 +1050,7 @@ export async function generatePlan(
           maxDuplicateRatio: maxDup / meaningful.length,
           sample: meaningful.slice(0, 3),
         });
-        return fallbackPlan(task);
+        return fb('degenerate-dupes');
       }
     }
 
@@ -916,7 +1064,7 @@ export async function generatePlan(
         goal: task.goal.slice(0, 80),
         sample: meaningful.slice(0, 4),
       });
-      return fallbackPlan(task);
+      return fb('incomplete-create');
     }
 
     // ── Sanity check: cap steps to maxSteps (on cleaned list, not raw placeholders) ──
@@ -933,10 +1081,14 @@ export async function generatePlan(
     // Never leak template/system text into plan.goal (UI + further prompts).
     validated.data.goal = displayAgentGoal(validated.data.goal) || displayAgentGoal(task.goal);
     validated.data.targetFiles = normalizeTargetFiles(validated.data.targetFiles);
-    return validated.data;
+    return {
+      plan: validated.data,
+      usedFallback: false,
+      usedHeavy: phaseModel.usedHeavy,
+    };
   } catch (e) {
     logger.warn('agent', 'Plan generation failed — using fallback', { goal: task.goal.slice(0, 80) }, e);
-    return fallbackPlan(task);
+    return fb('llm-error');
   }
 }
 
@@ -1113,15 +1265,45 @@ export async function executeStep(
   taskId: string,
   stepNum: number,
   taskSignal: AbortSignal,
+  opts?: { loopCount?: number; planComplexity?: 'low' | 'medium' | 'high' },
+): Promise<StepResult> {
+  try {
+    return await executeStepInner(task, stepData, tools, taskId, stepNum, taskSignal, opts);
+  } finally {
+    setOllamaNumCtx(undefined);
+    setOllamaKeepAlive(undefined);
+  }
+}
+
+async function executeStepInner(
+  task: AgentTask,
+  stepData: { system: string; messages: ModelMessage[] },
+  tools: ToolSet,
+  taskId: string,
+  stepNum: number,
+  taskSignal: AbortSignal,
+  opts?: { loopCount?: number; planComplexity?: 'low' | 'medium' | 'high' },
 ): Promise<StepResult> {
   const log = logger.context({ taskId: taskId.slice(0, 8), step: stepNum });
-  const model = await getAgentModel();
+  const phaseModel = await resolveAgentPhaseModel({
+    phase: 'execute',
+    goal: task.goal,
+    planComplexity: opts?.planComplexity,
+    loopCount: opts?.loopCount ?? 0,
+  });
+  if (phaseModel.usedHeavy) {
+    setOllamaKeepAlive('0');
+    await applyOllamaNumCtxForRole('agent', 'heavy');
+  } else {
+    await applyOllamaNumCtxForRole('agent', 'day');
+  }
+  const model = phaseModel.model;
   const { system, messages } = stepData;
 
   let fullText = '';
   const toolCalls: Array<{ name: string; input: unknown; output: unknown; success: boolean }> = [];
 
-  const modelName = await getAgentModelName();
+  const modelName = phaseModel.modelName;
   const { resolveModelToolsSupport } = await import('@/lib/llm/tool-support');
   const tryWithTools = await resolveModelToolsSupport(modelName);
   const executionMaxTokens = await resolveAgentPhaseMaxTokens('execution');
@@ -1302,7 +1484,27 @@ export async function synthesize(
   dialogueHistory: Array<{ role: string; content: string }> = [],
   taskSignal: AbortSignal,
 ): Promise<string> {
-  const model = await getAgentModel();
+  try {
+    return await synthesizeInner(task, plan, steps, dialogueHistory, taskSignal);
+  } finally {
+    setOllamaNumCtx(undefined);
+  }
+}
+
+async function synthesizeInner(
+  task: AgentTask,
+  plan: { goal: string; steps: string[] },
+  steps: Array<{ thought: string; action: string; observation: string }>,
+  dialogueHistory: Array<{ role: string; content: string }> = [],
+  taskSignal: AbortSignal,
+): Promise<string> {
+  // Lia face: day/chat when heavy is in the pool; else agent (pre-M3 behavior).
+  const phaseModel = await resolveAgentPhaseModel({
+    phase: 'synthesize',
+    goal: task.goal,
+  });
+  await applyOllamaNumCtxForRole('chat', 'day');
+  const model = phaseModel.model;
   // Grounded KB JSON only for pure lookup — not when exploration happened to touch KB.
   const useGroundedKb = isKbLookupGoal(task.goal);
 

@@ -34,8 +34,12 @@ Install CLI and ensure it is on `PATH`. Prefer models with **≥64k** context fo
 
 | Slot | Role |
 |------|------|
-| Chat / companion | Fast dialogue — tools usually off on trivial/simple turns; monologue/deliberate LLM pre-calls are off (TTFT) |
+| Chat / companion (day) | Fast dialogue — tools usually off on trivial/simple turns; monologue/deliberate LLM pre-calls are off (TTFT) |
 | Agent | ReAct for non-coding; or Claude Code `--model` when coding backend is on |
+| Heavy (optional) | Hard / research / loop escalate — brain phases; not a substitute for companion identity |
+| Claude Code | Coding executor only — never companion `buildSystemPrompt` |
+
+/** Day vs heavy vs CC:** day is the Lia face users talk to. Heavy runs **agent** brain phases (plan / weak-plan replan / loop execute) when configured — not the companion chat stream (keeps latency + voice). Synthesize and post–CC summary stay day voice. Claude Code stays one-executor for project coding when the toggle is on — no parallel small coding path. Inference pool (`LIA_INFERENCE_VRAM_GB`) and model names come from Settings/env, not hardcoded host SKUs. Pool-aware `num_ctx` on heavy uses **heavy** weight size, not day/agent.
 
 UI tip: Settings → Model → «Агент и память» repeats this split.
 

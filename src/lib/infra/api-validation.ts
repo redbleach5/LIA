@@ -169,6 +169,10 @@ export const updateSettingsSchema = z.object({
   model: z.string().optional(),
   /** Empty string = agent uses the same model as chat. */
   agentModel: z.string().optional(),
+  /** Empty string clears secondary (trivial stays on chat). */
+  secondaryModel: z.string().optional(),
+  /** Empty string clears heavy (escalate no-ops). */
+  heavyModel: z.string().optional(),
   embedModel: z.string().optional(),
   /** Coding via Claude Code CLI (Ollama Anthropic API). */
   claudeCodeEnabled: z.boolean().optional(),

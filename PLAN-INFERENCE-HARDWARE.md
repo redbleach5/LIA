@@ -1,10 +1,14 @@
 # Plan: inference hardware pool (VRAM + RAM + NVMe)
 
-**Status:** draft for owner review (2026-07-24)  
+> **Роль документа:** пресет и замеры **текущего** inference-хоста.  
+> **План реализации (milestones M0–M6 для агента):** [`PLAN-LIA-BOTH-POLES.md`](./PLAN-LIA-BOTH-POLES.md).  
+> Числа ниже (`14B`, `8–16k`, `16 GB`) — калибровка пула, не константы в коде.
+
+**Status:** draft for owner review (2026-07-24); subordinated to both-poles plan  
 **Goal:** не оставлять неиспользованной возможность задействовать всё железо под локальный Ollama / Lia — без бездумного компромисса «скорость любой ценой» и без экспериментального SSD-streaming в продукте.  
 **Audience:** завтра перечитать свежим взглядом: где план верный, где автор (агент) ошибается или чрезмерно ограничивает.
 
-Связанные файлы: `REMOTE-OLLAMA.md`, `src/lib/capability-profile.ts`, `src/lib/compute-budget.ts`, `src/lib/chat/context-budget.ts`, `src/lib/ollama.ts`, Settings → Model.
+Связанные файлы: `PLAN-LIA-BOTH-POLES.md`, `REMOTE-OLLAMA.md`, `src/lib/capability-profile.ts`, `src/lib/compute-budget.ts`, `src/lib/chat/context-budget.ts`, `src/lib/ollama.ts`, Settings → Model.
 
 ---
 

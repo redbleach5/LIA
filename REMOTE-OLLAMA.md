@@ -69,6 +69,27 @@ Lia запускается где угодно. Мозг (Ollama + GPU) може
 
 Для «утром на работу, GPU дома» бери **Tailscale**.
 
+## Роли моделей и пул железа
+
+Lia не привязана к одной SKU карты. Пул задаётся параметром; имена моделей — в Settings / `.env`.
+
+| Роль | Назначение |
+|------|------------|
+| **chat** (day) | Companion-диалог, user-facing голос после агента / Claude Code |
+| **agent** | ReAct plan/execute (tools); при CC off — coding loop |
+| **secondary** | Лёгкие trivial-ходы (если задана) |
+| **heavy** | Сложные / research / escalate — мозг, не обязательно «лицо» |
+| **embed** | Память / KB embeddings |
+| **claudeCode** | Coding executor (отдельный toggle); не companion prompt |
+
+**Пул:** `LIA_INFERENCE_VRAM_GB` = VRAM inference-хоста (обязателен при remote).  
+`LIA_INFERENCE_RAM_GB` — опциональный stub под будущий hybrid; сейчас не режет runtime.  
+NVMe ускоряет **load / смену моделей**, не заменяет VRAM как compute.
+
+Числа вроде «14B / 8–16k / 16 GB» — калибровка хоста в `PLAN-INFERENCE-HARDWARE.md`, не константы продукта.
+
+**Residency (keep_alive):** day/chat — длинный keep_alive (warmup). Heavy после escalate — короткий / `0`, чтобы не держать тяжёлые веса вместо day.
+
 ## Что не путать
 
 - **Удалённый Ollama** (`OLLAMA_BASE_URL` на Tailscale IP) — ноут говорит с домашним GPU. Это то, что нужно.

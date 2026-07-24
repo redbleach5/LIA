@@ -118,12 +118,14 @@ User message + mode (auto | agent)
   │
   └─ cognitive-depth.ts: planExecution(mode, tier, complexity)
       └── ExecutionPlan { calls, deliberate:false, selfCheck:false, maxTokens,
-                          toolsEnabled, autoWebSearch }
+                          toolsEnabled }
 
   Latency pass (current): deliberate + monologue LLM pre-calls are always off.
-  Depth still gates tools / maxTokens / autoWebSearch by tier × complexity.
+  Depth gates tools / maxTokens by tier × complexity.
+  Proactive web: needsProactiveWebSearch (task-complexity) — not a plan flag.
 
   Agent mode: ReAct in runner.ts (tools, maxSteps from agent tier)
+  Heavy escalate (optional): agent plan/replan/loop execute — not companion stream
 ```
 
 ## Agent task flow

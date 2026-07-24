@@ -47,6 +47,10 @@
 //      the variance.
 
 import type { Tier } from '@/lib/capability-profile';
+import {
+  resolvePoolAwareCtxCap,
+  type InferenceCtxRole,
+} from '@/lib/compute-budget';
 
 // ============================================================================
 // Constants
@@ -129,6 +133,8 @@ export interface DialogueBudgetInput {
   maxOutputTokens: number;
   /** Whether tools will be attached to the streamText call. */
   toolsEnabled: boolean;
+  /** Optional VRAM pool — keeps dialogue window aligned with num_ctx. */
+  pool?: PoolAwareCtxInput;
 }
 
 /** Result of budget computation. */
@@ -176,23 +182,59 @@ const TIER_INFERENCE_CTX_CAP: Record<Tier, number> = {
   max: 65536,
 };
 
+/** Optional VRAM-pool inputs for pool-aware num_ctx / dialogue window. */
+export type PoolAwareCtxInput = {
+  vramPoolGb?: number;
+  vramPoolKnown?: boolean;
+  parameterSizeB?: number;
+  quantization?: string | null;
+  /** day = prefer full GPU; heavy = allow mild spill. Default day. */
+  role?: InferenceCtxRole;
+  embedReserveGb?: number;
+};
+
 /**
  * Resolve the effective context window.
  *
  * If the model reported a real context window (Ollama `/api/show`), use it.
  * Otherwise fall back to a tier-based default. Always capped per tier for latency.
+ * When pool opts are known, further cap so weights+KV prefer full-GPU residency.
  */
-export function resolveContextWindow(contextWindow: number, tier: Tier): number {
+export function resolveContextWindow(
+  contextWindow: number,
+  tier: Tier,
+  pool?: PoolAwareCtxInput,
+): number {
   const tierCap = TIER_INFERENCE_CTX_CAP[tier];
+  let base: number;
   if (contextWindow > 0) {
-    return Math.min(contextWindow, tierCap);
+    base = Math.min(contextWindow, tierCap);
+  } else {
+    base = Math.min(FALLBACK_CONTEXT_WINDOW[tier], tierCap);
   }
-  return Math.min(FALLBACK_CONTEXT_WINDOW[tier], tierCap);
+
+  const poolCap = resolvePoolAwareCtxCap({
+    vramPoolGb: pool?.vramPoolGb ?? 0,
+    vramPoolKnown: pool?.vramPoolKnown === true,
+    parameterSizeB: pool?.parameterSizeB ?? 0,
+    quantization: pool?.quantization ?? null,
+    role: pool?.role ?? 'day',
+    embedReserveGb: pool?.embedReserveGb,
+  });
+  if (poolCap == null) return base;
+  return Math.min(base, poolCap);
 }
 
-/** Explicit num_ctx to send to Ollama — aligned with dialogue budget. */
-export function resolveInferenceNumCtx(contextWindow: number, tier: Tier): number {
-  return resolveContextWindow(contextWindow, tier);
+/**
+ * Explicit num_ctx to send to Ollama — aligned with dialogue budget.
+ * Pool formula prefers full-GPU residency; no host-SKU constants.
+ */
+export function resolveInferenceNumCtx(
+  contextWindow: number,
+  tier: Tier,
+  pool?: PoolAwareCtxInput,
+): number {
+  return resolveContextWindow(contextWindow, tier, pool);
 }
 
 /**
@@ -214,7 +256,11 @@ export function computeDialogueBudget(
   input: DialogueBudgetInput,
   messages: BudgetMessage[],
 ): DialogueBudgetResult {
-  const effectiveContextWindow = resolveContextWindow(input.contextWindow, input.tier);
+  const effectiveContextWindow = resolveContextWindow(
+    input.contextWindow,
+    input.tier,
+    input.pool,
+  );
 
   const systemPromptTokens = estimateTokens(input.systemPrompt);
   const toolTokens = input.toolsEnabled ? TOOL_SCHEMA_TOKENS : 0;

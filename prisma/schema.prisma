@@ -98,14 +98,50 @@ model ChatAttachment {
 // Только то, что пользователь сам сообщил и что относится ко всем чатам:
 // имя, профессия, любимый язык, часовой пояс и т.п.
 //
-// ВАЖНО: ключи с префиксом "user." — про пользователя, "lia." — про саму Лию.
-// Внутри чатов эти факты не пишутся — для контекстных фактов есть EpisodeFact.
+// ВАЖНО: ключи с префиксом "user." — legacy (мигрируются в Person);
+// "lia." — про саму Лию; "workspace." — память проекта.
+// Профили 2–3 людей: Person + PersonFact (не общий user.*).
 model GlobalFact {
   key       String   @id
   value     String
   confidence Float   @default(0.6)
   hitCount  Int      @default(0)
   updatedAt DateTime @updatedAt
+}
+
+// ============================================================================
+// People — до 3 собеседников на инстанс (имя + факты профиля).
+// Эпизод привязывается через EpisodeFact key `lia.personId`.
+// ============================================================================
+model Person {
+  id          String   @id @default(cuid())
+  displayName String
+  /** JSON string[] — доп. имена для распознавания */
+  aliasesJson String   @default("[]")
+  isDefault   Boolean  @default(false)
+  lastSeenAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  facts PersonFact[]
+
+  @@index([isDefault])
+  @@index([displayName])
+}
+
+model PersonFact {
+  id         String   @id @default(cuid())
+  personId   String
+  person     Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  /** profession, favorite_language, … — без префикса user. */
+  key        String
+  value      String
+  confidence Float    @default(0.7)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([personId, key])
+  @@index([personId])
 }
 
 // ============================================================================

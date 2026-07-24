@@ -45,6 +45,9 @@ export async function GET() {
   } catch { /* ignore */ }
 
   const userDisplayName = await getUserDisplayName();
+  const { listPeopleForSettings } = await import('@/lib/memory/user-profile');
+  const { MAX_PEOPLE } = await import('@/lib/memory/people');
+  const people = await listPeopleForSettings();
 
   const { getClaudeCodeSettings } = await import('@/lib/agent/claude-code/settings');
   const { detectClaudeBinary } = await import('@/lib/agent/claude-code/detect');
@@ -78,6 +81,8 @@ export async function GET() {
     activeVrm,
     avatarConfig,
     userDisplayName,
+    people,
+    maxPeople: MAX_PEOPLE,
   });
 }
 
@@ -88,7 +93,8 @@ export async function POST(req: NextRequest) {
     const body = parsed.data;
 
     const ollamaChanged = body.baseUrl !== undefined || body.model !== undefined
-      || body.embedModel !== undefined || body.agentModel !== undefined;
+      || body.embedModel !== undefined || body.agentModel !== undefined
+      || body.secondaryModel !== undefined || body.heavyModel !== undefined;
 
     // Single write — avoids partial in-memory state if a later field throw mid-loop.
     if (ollamaChanged) {
@@ -96,6 +102,8 @@ export async function POST(req: NextRequest) {
         baseUrl: body.baseUrl,
         model: body.model,
         agentModel: body.agentModel,
+        secondaryModel: body.secondaryModel,
+        heavyModel: body.heavyModel,
         embedModel: body.embedModel,
       });
     }
@@ -151,6 +159,9 @@ export async function POST(req: NextRequest) {
     const settings = await getOllamaSettings();
     const health = await checkOllamaHealth();
     const userDisplayName = await getUserDisplayName();
+    const { listPeopleForSettings } = await import('@/lib/memory/user-profile');
+    const { MAX_PEOPLE } = await import('@/lib/memory/people');
+    const people = await listPeopleForSettings();
     const { getClaudeCodeSettings } = await import('@/lib/agent/claude-code/settings');
     const { detectClaudeBinary } = await import('@/lib/agent/claude-code/detect');
     const { listOllamaCloudModels } = await import('@/lib/ollama-cloud-models');
@@ -179,6 +190,8 @@ export async function POST(req: NextRequest) {
         m.startsWith('e5-')
       ),
       userDisplayName,
+      people,
+      maxPeople: MAX_PEOPLE,
     });
   } catch (e) {
     logger.error('api', 'POST failed', {}, e);

@@ -25,6 +25,7 @@ import {
   buildChatPromptBundle,
 } from './pipeline-phases';
 import { chooseModelForQuery } from '@/lib/chat/model-selection';
+import { poolOptsFromProfile } from '@/lib/chat/inference-ctx';
 import {
   resolvePendingChatAttachments,
   buildUserModelMessage,
@@ -131,7 +132,9 @@ export async function runChatPipeline(input: ChatPipelineInput): Promise<ChatPip
   });
 
   const modelChoice = await chooseModelForQuery(complexity, tier);
-  const modelName = modelChoice.usedSecondary ? modelChoice.modelName : await getModelName();
+  const modelName = (modelChoice.usedSecondary || modelChoice.usedHeavy)
+    ? modelChoice.modelName
+    : await getModelName();
   const finalUserMessage = await buildUserModelMessage({
     text,
     attachments: resolvedAttachments,
@@ -161,6 +164,7 @@ export async function runChatPipeline(input: ChatPipelineInput): Promise<ChatPip
       abortSignal, log, streamError, pinnedSourceIds,
       modelChoice,
       contextWindow: profile?.contextWindow ?? 0,
+      pool: poolOptsFromProfile(profile),
     });
   } catch (e) {
     log.error('chat', 'runChatStreamText threw — returning fallback', {}, e instanceof Error ? e : undefined);

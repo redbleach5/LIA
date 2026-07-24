@@ -3,58 +3,45 @@ import 'server-only';
 // Fact extraction — извлечение фактов из диалога через LLM.
 //
 // Вызывается после каждого ответа Лии (в onFinish callback chat route).
-// Использует отдельный LLM-вызов с жёстким JSON-промптом:
-//   "Извлеки факты из этого диалога в формате key:value"
-//
-// Глобальные факты (user.name, user.profession) — переживают смену чата.
-// Эпизодные факты (current_project, topic) — только для этого чата.
-//
-// Чтобы не делать LLM-вызов на каждое сообщение (дорого), используется
-// эвристика: извлекаем только если сообщение содержит "меня зовут",
-// "я работаю", "мой проект" и подобные паттерны, ИЛИ если сообщение
-// длиннее 200 символов (возможно содержит контекст).
+// Глобальные факты о человеке → Person + PersonFact (привязка эпизода).
+// Эпизодные факты (current.*) — EpisodeFact.
 
 import { streamText } from 'ai';
 import { getChatModel } from '@/lib/ollama';
-import { upsertGlobalFact, upsertEpisodeFact } from './facts';
+import { upsertEpisodeFact } from './facts';
 import { remember } from './vector';
 import { GROUNDING } from '@/lib/prompts/grounding';
 import { logger } from '@/lib/logger';
+import { getEpisodePersonId, bindEpisodePerson } from './person-binding';
+import {
+  createPerson,
+  countPeople,
+  extractClaimedNameFromUtterance,
+  listPeople,
+  MAX_PEOPLE,
+  renamePersonDisplayName,
+  resolvePersonFromUtterance,
+  upsertPersonFact,
+} from './people';
 
-// ============================================================================
-// Эвристика — стоит ли извлекать факты из этого сообщения
-// ============================================================================
-// P2-1 fix (M-X-6): use Unicode property escapes instead of \b.
-// JavaScript \b is based on ASCII \w — does NOT work for Cyrillic letters.
-// The patterns below now use (?<![\p{L}\p{N}]) and (?![\p{L}\p{N}]) with the `u` flag.
 const FACT_TRIGGER_PATTERNS = [
-  // Имя, профессия, личное
   /(?<![\p{L}\p{N}])(меня зовут|моё имя|я [\wа-яё]+,? а ты|зови меня)(?![\p{L}\p{N}])/iu,
   /(?<![\p{L}\p{N}])(я работаю|я учусь|моя профессия|по профессии)(?![\p{L}\p{N}])/iu,
   /(?<![\p{L}\p{N}])(мне \d+ лет|мне исполнилось)(?![\p{L}\p{N}])/iu,
-  // Проекты, контекст
   /(?<![\p{L}\p{N}])(мой проект|я делаю|я пишу|я разрабатываю|мы работаем над)(?![\p{L}\p{N}])/iu,
   /(?<![\p{L}\p{N}])(использую|пишу на|язык программирования|фреймворк)(?![\p{L}\p{N}])/iu,
-  // Предпочтения
   /(?<![\p{L}\p{N}])(мне нравится|я люблю|не люблю|предпочитаю|мой любимый)(?![\p{L}\p{N}])/iu,
-  // Цели, задачи
   /(?<![\p{L}\p{N}])(моя цель|я хочу сделать|планирую|задача —)(?![\p{L}\p{N}])/iu,
 ];
 
 const MIN_LENGTH_FOR_EXTRACTION = 200;
 
 function shouldExtractFacts(userMessage: string): boolean {
-  // Короткие сообщения типа "привет" / "да" / "спасибо" — не извлекаем
   if (userMessage.length < 30) return false;
-  // Длинные сообщения — возможно содержат контекст
   if (userMessage.length > MIN_LENGTH_FOR_EXTRACTION) return true;
-  // Проверяем триггер-паттерны
   return FACT_TRIGGER_PATTERNS.some(re => re.test(userMessage));
 }
 
-// ============================================================================
-// Промпт для извлечения фактов
-// ============================================================================
 const EXTRACTION_PROMPT = `Проанализируй диалог между пользователем и ассистентом Лией.
 Извлеки ФАКТЫ — устойчивую информацию о пользователе и контексте.
 
@@ -90,7 +77,6 @@ export function normalizeFactStorageKey(
 ): string | null {
   let key = rawKey.trim();
   if (!key) return null;
-  // LLM часто возвращает уже с префиксом — снимаем все ведущие user./current.
   while (/^(user|current)\./i.test(key)) {
     key = key.replace(/^(user|current)\./i, '');
   }
@@ -99,9 +85,47 @@ export function normalizeFactStorageKey(
   return `${prefix}.${key.toLowerCase()}`;
 }
 
-// ============================================================================
-// Извлечь факты из диалога и сохранить в БД
-// ============================================================================
+async function ensurePersonForExtraction(
+  episodeId: string,
+  userMessage: string,
+): Promise<string | null> {
+  let personId = await getEpisodePersonId(episodeId);
+  if (personId) return personId;
+
+  const people = await listPeople();
+  const matched = resolvePersonFromUtterance(userMessage, people);
+  if (matched) {
+    await bindEpisodePerson(episodeId, matched.id);
+    return matched.id;
+  }
+
+  const claimed = extractClaimedNameFromUtterance(userMessage);
+  if (claimed && people.length < MAX_PEOPLE) {
+    const hit = resolvePersonFromUtterance(claimed, people);
+    if (hit) {
+      await bindEpisodePerson(episodeId, hit.id);
+      return hit.id;
+    }
+    try {
+      const created = await createPerson({
+        displayName: claimed,
+        isDefault: people.length === 0,
+      });
+      await bindEpisodePerson(episodeId, created.id);
+      return created.id;
+    } catch {
+      return null;
+    }
+  }
+
+  if (people.length === 1 && people[0]) {
+    await bindEpisodePerson(episodeId, people[0].id);
+    return people[0].id;
+  }
+
+  return null;
+}
+
 export async function extractAndSaveFacts(params: {
   userMessage: string;
   liaMessage: string;
@@ -109,7 +133,6 @@ export async function extractAndSaveFacts(params: {
 }): Promise<{ globalCount: number; episodeCount: number }> {
   const { userMessage, liaMessage, episodeId } = params;
 
-  // Эвристика — не делаем LLM-вызов на каждое сообщение
   if (!shouldExtractFacts(userMessage)) {
     return { globalCount: 0, episodeCount: 0 };
   }
@@ -124,10 +147,8 @@ export async function extractAndSaveFacts(params: {
       model,
       system: 'Ты — модуль извлечения фактов. Возвращай только валидный JSON, без markdown.',
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1, // низкая температура — детерминированность
+      temperature: 0.1,
       maxOutputTokens: 300,
-      // Таймаут 30 сек — fact extraction в background, не должен блокировать чат.
-      // Если LLM таймаутит — просто пропускаем (non-fatal).
       abortSignal: AbortSignal.timeout(30_000),
       onError: (error) => {
         logger.warn('memory', 'Fact extraction streamText onError', {
@@ -138,7 +159,6 @@ export async function extractAndSaveFacts(params: {
 
     const text = await result.text;
 
-    // P1-3 fix (H-MEM-2): use shared extractJson instead of greedy regex.
     const { extractJson } = await import('@/lib/infra/prompt-safety');
     const parsed = extractJson<{
       global?: Record<string, string>;
@@ -151,21 +171,37 @@ export async function extractAndSaveFacts(params: {
     let globalCount = 0;
     let episodeCount = 0;
 
-    // Сохраняем глобальные факты
-    if (parsed.global && typeof parsed.global === 'object') {
+    const personId = await ensurePersonForExtraction(episodeId, userMessage);
+
+    if (parsed.global && typeof parsed.global === 'object' && personId) {
       for (const [key, value] of Object.entries(parsed.global)) {
-        if (typeof value === 'string' && value.trim().length > 0 && value.trim().length < 500) {
-          const trimmed = value.trim();
-          const storageKey = normalizeFactStorageKey(key, 'user');
-          if (!storageKey) continue;
-          await upsertGlobalFact(storageKey, trimmed);
+        if (typeof value !== 'string' || value.trim().length === 0 || value.trim().length >= 500) {
+          continue;
+        }
+        const trimmed = value.trim();
+        const storageKey = normalizeFactStorageKey(key, 'user');
+        if (!storageKey) continue;
+        const shortKey = storageKey.replace(/^user\./, '');
+        if (shortKey === 'name') {
+          await renamePersonDisplayName(personId, trimmed);
+          globalCount++;
           await remember({
             episodeId,
             sourceType: 'fact',
-            text: `[global] ${storageKey}: ${trimmed}`,
+            text: `[person] name: ${trimmed}`,
           });
-          globalCount++;
+          continue;
         }
+        // At capacity: never overwrite another person's profile via unbound name change
+        const n = await countPeople();
+        if (n > MAX_PEOPLE) continue;
+        await upsertPersonFact(personId, shortKey, trimmed);
+        await remember({
+          episodeId,
+          sourceType: 'fact',
+          text: `[person] ${shortKey}: ${trimmed}`,
+        });
+        globalCount++;
       }
     }
 
@@ -187,7 +223,11 @@ export async function extractAndSaveFacts(params: {
     }
 
     if (globalCount + episodeCount > 0) {
-      logger.info('memory', `Facts extracted`, { globalCount, episodeCount });
+      logger.info('memory', `Facts extracted`, {
+        globalCount,
+        episodeCount,
+        personId: personId?.slice(0, 8),
+      });
     }
 
     return { globalCount, episodeCount };

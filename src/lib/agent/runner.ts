@@ -581,6 +581,7 @@ export async function runAgentTask(taskId: string): Promise<void> {
     const MAX_CONSECUTIVE_ERRORS = 3;
     /** One automatic strategy hint before loop→ask_user on empty FS / dead ends. */
     let strategyHintGiven = false;
+    let loopHitCount = 0;
     /** Extra nudge when the model spins on reason-only without tools. */
     let toolForceHintCount = 0;
     /** Create Runtime coach (inspect stall / missing runtime_start). */
@@ -702,6 +703,7 @@ export async function runAgentTask(taskId: string): Promise<void> {
 
         const loopSignal = await detectLoop(steps);
         if (loopSignal) {
+          loopHitCount++;
           const reason = loopSignal.kind === 'pattern'
             ? `Повторяю одно и то же действие (${loopSignal.count} раза): ${loopSignal.tool}`
             : loopSignal.kind === 'empty'
@@ -808,7 +810,15 @@ export async function runAgentTask(taskId: string): Promise<void> {
       });
 
       const stepStartTime = Date.now();
-      const stepResult = await executeStep(task, stepMessages, agentTools, taskId, i + 1, taskAbortCtrl.signal);
+      const stepResult = await executeStep(
+        task,
+        stepMessages,
+        agentTools,
+        taskId,
+        i + 1,
+        taskAbortCtrl.signal,
+        { loopCount: loopHitCount, planComplexity: plan.complexity },
+      );
       const stepDuration = Date.now() - stepStartTime;
 
       log.info('agent', `Step ${i + 1} completed`, {

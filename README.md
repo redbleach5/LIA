@@ -95,7 +95,7 @@ bun run test -- tests/core   # только контракты ядра (~179)
 - **Агентский режим** — ReAct + checkpointing, ask_user, SSE → **inline `parts[]` в ленте**; Apply ask|auto, `@file`/`@folder`, rollback; шаблоны `general` / `researcher` / `coder`
 - **3D VRM-аватар** — blendshapes для эмоций, дыхание, моргание, lip-sync; камера и фон в настройках
 - **Capability tier** — авто-детект железа и размера модели → `micro` / `standard` / `plus` / `max` (отдельно chat tier и agent tier при разных слотах), кэш 1 час
-- **Cognitive depth** — `classifyTaskComplexity` × `planExecution` → tools / maxTokens / autoWebSearch (без pre-stream LLM)
+- **Cognitive depth** — `classifyTaskComplexity` × `planExecution` → tools / maxTokens (без pre-stream LLM; web — `needsProactiveWebSearch`)
 - **Agent tools** — FS (`read/write/edit_file`, `grep`, `list_*`, `file_search`), **`run_command`**, `code_run`, **Create Runtime** (`propose_design`, `runtime_start`/`logs`/`stop`), web, `save_artifact`, KB, codebase, `ask_user`, optional MCP — см. `src/lib/agent/tools.ts`
 - **Create Runtime** — Design Gate → scaffold → Process Supervisor → Verify/Heal; вкладки в свёрнутом Agent Workbench
 - **UI** — светлая «тёплый лён» палитра; Inter (UI) + Plus Jakarta Sans (display) + JetBrains Mono
@@ -176,7 +176,7 @@ prisma/schema.prisma                # Episode, Message, ChatAttachment, facts, v
 
 ### 1. Adaptive LLM pipeline (не фиксированная цепочка)
 
-Основной ответ — один `streamText` с tools (на нетривиальных ходах). Pre-stream monologue / deliberate LLM выключены (TTFT). Cognitive depth по-прежнему режет tools / maxTokens / autoWebSearch по tier × complexity.
+Основной ответ — один `streamText` с tools (на нетривиальных ходах). Pre-stream monologue / deliberate LLM выключены (TTFT). Cognitive depth режет tools / maxTokens по tier × complexity; proactive web — `needsProactiveWebSearch`, не поле плана.
 
 ### 2. Память привязана к episode_id + source_type
 
@@ -233,7 +233,8 @@ ORDER BY v.distance LIMIT ?
 2. **Tier** (chat tier из capability profile)
 3. **Complexity** (`lib/task-complexity.ts` → `trivial` … `research`)
 
-Результат — `ExecutionPlan`: tools / maxTokens / autoWebSearch.  
+Результат — `ExecutionPlan`: tools / maxTokens.  
+Proactive web — `needsProactiveWebSearch` (не поле плана).  
 `deliberate` и monologue LLM сейчас **всегда off** (latency pass); self-check в streaming тоже off.
 
 ### 9. Circuit breaker + LLM-error-aware loop detection
